@@ -122,9 +122,6 @@ RUN --mount=type=secret,id=github_token,required=false \
 COPY backend/docker-entrypoint.sh /app/backend/docker-entrypoint.sh
 RUN chmod +x /app/backend/docker-entrypoint.sh
 
-# Present at /app/docker-compose.yml for bootstrap-strip tests when volumes omit it.
-COPY docker-compose.yml /app/docker-compose.yml
-
 COPY backend/alembic.ini /app/backend/alembic.ini
 COPY backend/migrations /app/backend/migrations
 COPY backend/contracts /app/backend/contracts

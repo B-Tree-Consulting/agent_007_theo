@@ -1,6 +1,6 @@
 {
   "id": "agent-007-theo-local",
-  "name": "BFA Host Sample (local)",
+  "name": "agent-007-theo (local)",
   "values": [
     {
       "key": "base_url",
