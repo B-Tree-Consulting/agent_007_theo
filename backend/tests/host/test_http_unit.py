@@ -6,7 +6,7 @@ import pytest
 from bfa.aydeo_host import HostError, HostErrorCode, HostResponse
 from fastapi import HTTPException
 
-from src.host.http import raise_for_host_response
+from src.host.http import raise_for_host_response, validation_error_detail
 
 
 def _err(
@@ -49,13 +49,58 @@ def test_raise_invalid_input_schema_422() -> None:
         raise_for_host_response(
             _err(
                 HostErrorCode.INVALID_CONTEXT,
-                "input schema mismatch",
-                details={"tool": "t", "errors": ["bad"]},
+                "tool input did not match the registered input schema",
+                details={
+                    "tool": "place_limit_equity_order",
+                    "errors": [
+                        {
+                            "type": "value_error",
+                            "loc": ("limit_price",),
+                            "msg": "must be greater than zero",
+                            "input": 0,
+                            "ctx": {"error": ValueError("must be greater than zero")},
+                            "url": "https://errors.pydantic.dev/2.13/v/value_error",
+                        }
+                    ],
+                },
             ),
-            tool_name="t",
+            tool_name="place_limit_equity_order",
         )
     assert exc.value.status_code == 422
-    assert "Invalid inputs for t" in str(exc.value.detail)
+    assert exc.value.detail == [
+        {
+            "type": "value_error",
+            "loc": ["limit_price"],
+            "msg": "must be greater than zero",
+            "input": 0,
+        }
+    ]
+
+
+def test_validation_detail_skips_unsafe_shapes() -> None:
+    assert validation_error_detail([]) is None
+    assert validation_error_detail("nope") is None
+    detail = validation_error_detail(
+        [
+            "skip",
+            {"type": "value_error", "loc": "limit_price", "msg": "bad", "input": {"nested": 1}},
+        ]
+    )
+    assert detail == [{"type": "value_error", "loc": ["limit_price"], "msg": "bad"}]
+
+
+def test_non_list_validation_errors_are_not_stringified() -> None:
+    with pytest.raises(HTTPException) as exc:
+        raise_for_host_response(
+            _err(
+                HostErrorCode.INVALID_CONTEXT,
+                "tool input did not match the registered input schema",
+                details={"errors": "order-sandoz-20261008-1"},
+            ),
+            tool_name="place_limit_equity_order",
+        )
+    assert "order-sandoz-20261008-1" not in str(exc.value.detail)
+    assert "Invalid inputs" not in str(exc.value.detail)
 
 
 def test_raise_invalid_context_404_status() -> None:

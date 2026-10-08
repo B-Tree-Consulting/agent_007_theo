@@ -1,0 +1,25 @@
+# Trading 212 API tickers for the current book (Invest UI short names in comments).
+# COUR
+COUR_US_EQ
+# CRM
+CRM_US_EQ
+# IVV
+IVV_EQ
+# NOW
+NOW_US_EQ
+# PLTR
+PLTR_US_EQ
+# QQQ
+QQQ_EQ
+# VT
+VT_EQ
+# VTI
+VTI_EQ
+# SNOW
+SNOW_US_EQ
+# SAP
+SAP_US_EQ
+# NOVN
+NOVN_CH_EQ
+# SDZ
+SDZ_CH_EQ

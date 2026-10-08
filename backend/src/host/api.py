@@ -28,6 +28,7 @@ from src.host.schemas import (
     BfaInvokeResponse,
 )
 from src.shared.bfa_capability_contract import CAPABILITY_HEADER, normalize_capability_header_value
+from src.shared.invoke_scope import bind_invoke_case_id
 
 logger = logging.getLogger(__name__)
 
@@ -180,7 +181,7 @@ async def bfa_invoke(
     with set_runtime_request_context(
         entra_token=access.token,
         correlation_id=body.correlation_id,
-    ):
+    ), bind_invoke_case_id(body.case_id, body.correlation_id, body.approval_record_id):
         resp = await blueprint.invoke(runtime_request)
     if resp.ok:
         return _serialize_execute_result(resp.body)

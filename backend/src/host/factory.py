@@ -14,6 +14,7 @@ from src.config import get_settings, parse_entra_api_guid_from_audience_string
 from src.host.case_state_adapter import AydeoCaseStateAdapter
 from src.host.catalog_scope import build_catalog_scope
 from src.host.facade import get_host_bfa
+from src.theo.catalog_metadata import TheoCatalogMetadataProvider
 from src.shared.bfa_capability_contract import CAPABILITY_HEADER
 
 _MIN_AGENTSTEPKIT = (0, 2, 27)
@@ -112,9 +113,9 @@ def _resolve_platform_inputs() -> _PlatformInputs:
 def register_sample_modules() -> None:
     """Register domain modules before the host facade is constructed."""
     from src.host.facade import HostSampleBFA, _get_host_bfa_cached
-    from src.samples.hello.bootstrap import register_hello_tools
+    from src.theo.bootstrap import register_theo_tools
 
-    if register_hello_tools(HostSampleBFA):
+    if register_theo_tools(HostSampleBFA):
         # BFA binds class tool specs at construction; drop a stale empty cached instance.
         _get_host_bfa_cached.cache_clear()
 
@@ -244,6 +245,7 @@ def _assemble_host_blueprint() -> AydeoHostBlueprint:
             config=host_config,
             case_state_adapter=case_state_adapter,
             catalog_scope=catalog_scope,
+            catalog_metadata_provider=TheoCatalogMetadataProvider(),
         )
 
     return build_aydeo_host(
@@ -252,6 +254,7 @@ def _assemble_host_blueprint() -> AydeoHostBlueprint:
         config=host_config,
         case_state_adapter=case_state_adapter,
         catalog_scope=catalog_scope,
+        catalog_metadata_provider=TheoCatalogMetadataProvider(),
     )
 
 

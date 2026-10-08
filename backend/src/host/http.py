@@ -9,6 +9,35 @@ from fastapi import HTTPException, status
 
 from src.shared.errors import error_response_body
 
+_JSON_SAFE = (str, int, float, bool, type(None))
+
+
+def validation_error_detail(errors: Any) -> list[dict[str, Any]] | None:
+    """Turn a kit errors list into a Chat-readable 422 detail list.
+
+    A non-list is ignored so callers do not stringify errors into the message.
+    """
+    if not isinstance(errors, list) or not errors:
+        return None
+    detail: list[dict[str, Any]] = []
+    for item in errors:
+        if not isinstance(item, dict):
+            continue
+        loc = item.get("loc") or ()
+        if isinstance(loc, (list, tuple)):
+            loc_out = [str(part) for part in loc]
+        else:
+            loc_out = [str(loc)]
+        entry: dict[str, Any] = {
+            "type": str(item.get("type") or "value_error"),
+            "loc": loc_out,
+            "msg": str(item.get("msg") or ""),
+        }
+        if "input" in item and isinstance(item.get("input"), _JSON_SAFE):
+            entry["input"] = item.get("input")
+        detail.append(entry)
+    return detail
+
 
 def raise_for_host_response(
     resp: HostResponse,
@@ -31,12 +60,11 @@ def raise_for_host_response(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Unknown tool: {tool_name}",
             )
-        if "input" in message.lower() and "schema" in message.lower():
-            name = tool_name or str(details.get("tool") or "tool")
-            errors = details.get("errors")
+        validation_detail = validation_error_detail(details.get("errors"))
+        if validation_detail is not None:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Invalid inputs for {name}: {errors}",
+                detail=validation_detail,
             )
         if err.status_code == 404:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=message)
