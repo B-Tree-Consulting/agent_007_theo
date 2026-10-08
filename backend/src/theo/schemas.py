@@ -392,6 +392,7 @@ class TradeIntentView(BaseModel):
     submitted_at: datetime | None = None
     t212_order_id: str | None = None
     error_code: str | None = None
+    broker_message: str | None = None
 
 
 class TradeIntentsOutput(BaseModel):

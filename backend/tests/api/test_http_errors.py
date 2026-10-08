@@ -21,6 +21,27 @@ def test_http_exception_handler_passes_through_structured_error() -> None:
     assert response.headers["x-test"] == "1"
 
 
+def test_http_exception_handler_maps_field_errors() -> None:
+    exc = HTTPException(
+        status_code=422,
+        detail=[
+            {
+                "type": "value_error",
+                "loc": ["quantity"],
+                "msg": "Value error, must be greater than zero",
+                "input": 0,
+            }
+        ],
+    )
+    response = asyncio.run(http_exception_handler(None, exc))
+    body = _response_json(response)
+    assert response.status_code == 422
+    assert body["error"]["code"] == "submit_input_invalid"
+    assert body["error"]["details"]["fields"] == [
+        {"field": "quantity", "reason": "must be greater than zero"}
+    ]
+
+
 def test_http_exception_handler_wraps_plain_detail() -> None:
     exc = HTTPException(status_code=404, detail="not found")
     response = asyncio.run(http_exception_handler(None, exc))

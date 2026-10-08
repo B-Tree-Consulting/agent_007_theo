@@ -76,8 +76,9 @@ DESCRIPTIONS = {
     ),
     "get_trade_intents": (
         "List the orders this BFA has recorded for the current case, including which are awaiting the "
-        "manager's approval and which failed and why. Use this to see whether a trade you proposed "
-        "earlier has gone through before proposing it again."
+        "manager's approval and which failed and why. A failed row includes error_code and the broker "
+        "message from the execution attempt. This reads the case record, not a live broker search. "
+        "Use this to see whether a trade you proposed earlier has gone through before proposing it again."
     ),
 }
 
@@ -283,6 +284,7 @@ async def get_trade_intents(self: Any, inputs: GetTradeIntentsInput) -> TradeInt
                 submitted_at=row.submitted_at,
                 t212_order_id=row.t212_order_id,
                 error_code=row.error_code,
+                broker_message=row.broker_message,
             )
             for row in rows
         ]

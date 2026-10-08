@@ -6,7 +6,7 @@ import pytest
 from bfa.aydeo_host import HostError, HostErrorCode, HostResponse
 from fastapi import HTTPException
 
-from src.host.http import raise_for_host_response, validation_error_detail
+from src.host.http import profile_field_errors, raise_for_host_response, validation_error_detail
 
 
 def _err(
@@ -75,6 +75,23 @@ def test_raise_invalid_input_schema_422() -> None:
             "input": 0,
         }
     ]
+
+
+def test_profile_field_errors_uses_the_leaf_field() -> None:
+    assert profile_field_errors(["skip", {"loc": [], "msg": "ignored"}]) == []
+    assert profile_field_errors([{"loc": ["body", "inputs"], "msg": "no field"}]) == []
+    assert profile_field_errors([{"loc": "quantity", "msg": ""}]) == [
+        {"field": "quantity", "reason": "Invalid value"}
+    ]
+    assert profile_field_errors([{"loc": ["stop_price"]}]) == [
+        {"field": "stop_price", "reason": "Invalid value"}
+    ]
+    assert profile_field_errors([{"loc": ["quantity"], "msg": "value error, "}]) == [
+        {"field": "quantity", "reason": "value error,"}
+    ]
+    assert profile_field_errors(
+        [{"loc": ["body", "inputs", "limit_price"], "msg": "Value error, must be greater than zero"}]
+    ) == [{"field": "limit_price", "reason": "must be greater than zero"}]
 
 
 def test_validation_detail_skips_unsafe_shapes() -> None:

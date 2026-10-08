@@ -4,6 +4,17 @@ from __future__ import annotations
 
 import pytest
 
+from tests.host.conftest import (  # noqa: F401
+    _host_canaries_when_sample_absent,
+    _mock_open_case_cms,
+    _patch_test_platform_adapters,
+    _stub_case_comment_posts,
+    case_identity_overlay,
+    client,
+    de_id,
+    recorded_case_comments,
+    sample_capability_token,
+)
 from tests.theo.fakes import FakeMarket, FakeT212, fake_fx
 
 
@@ -37,10 +48,10 @@ def _patch_theo_clients(
     monkeypatch.setattr("src.theo.queries.get_market_data_client", lambda: fake_market)
     monkeypatch.setattr("src.theo.clients.market_data.get_market_data_client", lambda: fake_market)
 
-    async def _fx():
+    async def _fx(*_args, **_kwargs):
         return fake_fx()
 
-    monkeypatch.setattr("src.theo.snapshot.load_usd_fixing", _fx)
-    monkeypatch.setattr("src.theo.clients.cnb.load_usd_fixing", _fx)
+    monkeypatch.setattr("src.theo.snapshot.load_fixing", _fx)
+    monkeypatch.setattr("src.theo.clients.cnb.load_fixing", _fx)
     yield
     get_settings.cache_clear()

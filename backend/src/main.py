@@ -19,9 +19,10 @@ from src.config import get_settings
 from src.host.api import router as bfa_router
 from src.host.auth import require_readiness_access, security
 from src.host.factory import get_host_blueprint, warm_host_on_startup
-from src.host.http import raise_for_host_response
+from src.host.http import profile_field_errors, raise_for_host_response
 from src.host.outbox_factory import close_audit_outbox_if_active
 from src.shared.auth import _resolve_bearer_token
+from src.shared.errors import error_response_body
 
 settings = get_settings()
 
@@ -61,6 +62,18 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
     headers = dict(exc.headers) if exc.headers else {}
     if isinstance(exc.detail, dict) and "error" in exc.detail:
         return JSONResponse(status_code=exc.status_code, content=exc.detail, headers=headers)
+    if isinstance(exc.detail, list):
+        fields = profile_field_errors(exc.detail)
+        if fields:
+            return JSONResponse(
+                status_code=exc.status_code,
+                content=error_response_body(
+                    "submit_input_invalid",
+                    "Some inputs are invalid. Check the highlighted fields and try again.",
+                    {"fields": fields},
+                ),
+                headers=headers,
+            )
     return JSONResponse(
         status_code=exc.status_code,
         content={
