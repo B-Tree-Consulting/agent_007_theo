@@ -1,0 +1,22 @@
+{
+  "vector_id": "capture_bound_thread_denied",
+  "classification": "parity_aligned",
+  "applicability": [
+    "reference_host"
+  ],
+  "tool_role": {
+    "role_id": "capture_intent_medium_submit",
+    "tool_kind": "action_factory",
+    "risk": "medium",
+    "case_scope": "capture_intent",
+    "invoke_phase": "execute",
+    "flow": "submit_needs_confirmation"
+  },
+  "hub_reference": "case-scope-policy-parity.md \u2014 Capture while bound",
+  "discrepancy_issue": null,
+  "setup": {
+    "caller_surface": "capture_bound",
+    "case_state": "open",
+    "envelope_case_id": "dynamic"
+  }
+}

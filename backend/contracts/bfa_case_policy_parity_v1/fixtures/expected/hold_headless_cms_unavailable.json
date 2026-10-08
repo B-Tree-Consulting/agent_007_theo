@@ -1,0 +1,12 @@
+{
+  "decision": "deny",
+  "http_status": 503,
+  "response_shape": "policy_nested",
+  "error": {
+    "code": "hold_state_unavailable"
+  },
+  "side_effects": {
+    "case_mutated": false,
+    "grant_verify_count": 0
+  }
+}

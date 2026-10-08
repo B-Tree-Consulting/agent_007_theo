@@ -1,0 +1,84 @@
+{
+  "id": "agent-007-theo-local",
+  "name": "BFA Host Sample (local)",
+  "values": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8015",
+      "enabled": true
+    },
+    {
+      "key": "auth_auto_mint",
+      "value": "true",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "auth_mode",
+      "value": "test",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "auth_test_mode",
+      "value": "true",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "bfa_test_de_id",
+      "value": "00000000-0000-4000-8000-0000000000de",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "bfa_service_slug",
+      "value": "agent-007-theo",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "management_token",
+      "value": "",
+      "enabled": true
+    },
+    {
+      "key": "de_token",
+      "value": "",
+      "enabled": true
+    },
+    {
+      "key": "capability_token",
+      "value": "",
+      "enabled": true
+    },
+    {
+      "key": "access_token",
+      "value": "",
+      "enabled": true
+    },
+    {
+      "key": "auth_tokens_minted_at",
+      "value": "",
+      "enabled": true
+    },
+    {
+      "key": "bfa_confirm_test_mode",
+      "value": "true",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "bfa_invoke_diagnostic_mode",
+      "value": "true",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "plan_token",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    }
+  ]
+}

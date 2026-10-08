@@ -1,0 +1,12 @@
+{
+  "decision": "deny",
+  "http_status": 403,
+  "response_shape": "policy_nested",
+  "error": {
+    "code": "invoke_grant_already_used"
+  },
+  "side_effects": {
+    "case_mutated": false,
+    "grant_verify_count": 1
+  }
+}

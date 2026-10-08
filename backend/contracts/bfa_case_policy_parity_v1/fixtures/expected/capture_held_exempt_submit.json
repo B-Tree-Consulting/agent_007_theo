@@ -1,0 +1,12 @@
+{
+  "decision": "allow",
+  "http_status": 200,
+  "response_shape": "action_assertion",
+  "assertion_ids": [
+    "needs-confirmation"
+  ],
+  "side_effects": {
+    "case_mutated": false,
+    "grant_verify_count": 0
+  }
+}

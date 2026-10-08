@@ -1,0 +1,43 @@
+{
+  "mappings": [
+    {
+      "role_id": "bounded_query_low_execute",
+      "tool_role": {
+        "tool_kind": "query",
+        "risk": "low",
+        "case_scope": "active_open_case",
+        "invoke_phase": "execute",
+        "flow": "direct_execute"
+      },
+      "tool_name": "canary_query_bounded",
+      "tool_version": "1.0.0",
+      "default_inputs": {}
+    },
+    {
+      "role_id": "action_low_direct_execute",
+      "tool_role": {
+        "tool_kind": "action_factory",
+        "risk": "low",
+        "case_scope": "active_open_case",
+        "invoke_phase": "execute",
+        "flow": "direct_execute"
+      },
+      "tool_name": "canary_action_direct",
+      "tool_version": "1.0.0",
+      "default_inputs": {"attention_summary": "parity vector"}
+    },
+    {
+      "role_id": "action_low_reference_execute",
+      "tool_role": {
+        "tool_kind": "action_factory",
+        "risk": "low",
+        "case_scope": "active_open_case",
+        "invoke_phase": "execute",
+        "flow": "direct_execute"
+      },
+      "tool_name": "canary_action_reference",
+      "tool_version": "1.0.0",
+      "default_inputs": {"body": "parity"}
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "vector_id": "hold_headless_cms_unavailable",
+  "classification": "parity_aligned",
+  "applicability": [
+    "shared_engine",
+    "reference_host"
+  ],
+  "tool_role": {
+    "role_id": "bounded_query_low_execute",
+    "tool_kind": "query",
+    "risk": "low",
+    "case_scope": "active_open_case",
+    "invoke_phase": "execute",
+    "flow": "direct_execute"
+  },
+  "hub_reference": "case-scope-policy-parity.md \u2014 Dependency unavailable",
+  "discrepancy_issue": null,
+  "setup": {
+    "caller_surface": "headless",
+    "case_state": "open",
+    "envelope_case_id": "dynamic",
+    "cms_mode": "hold_fail"
+  }
+}

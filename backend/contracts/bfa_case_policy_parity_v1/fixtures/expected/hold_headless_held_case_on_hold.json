@@ -1,0 +1,12 @@
+{
+  "decision": "deny",
+  "http_status": 409,
+  "response_shape": "policy_nested",
+  "error": {
+    "code": "case_on_hold"
+  },
+  "side_effects": {
+    "case_mutated": false,
+    "grant_verify_count": 0
+  }
+}

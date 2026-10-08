@@ -1,0 +1,39 @@
+{
+  "contract_suite_version": "bfa_case_policy_parity_v1",
+  "baseline_runtime_commit_sha": "6cf4fedf56586c714b61ba1cf83d7eaa4f2a6617",
+  "hub_contract_commit_sha": "39330f5fea1d210741f617ec5352719b6235fdc5",
+  "contract_source_ref": "bfa-case-policy-parity-v1.0.0",
+  "payload_sha256": "5a376f502d35b2cdf3796c0d7f5b3683252ba6904e28265f702111e16d85e31f",
+  "authoring_role_mapping_sha256": "4a5e4c83f6c7a374d32240890a336d8d15503c296b6df5e087955254aeb773a7",
+  "consumer_repo": "B-Tree-Consulting/b-tree-aydeo-bfa",
+  "consumer_vendor_script": "scripts/vendor-bfa-case-policy-parity.sh",
+  "baseline_runtime_statement": "All runtime files under characterization are identical to baseline_runtime_commit_sha; only test, contract export, and export-script paths differ.",
+  "test_commands": [
+    "./scripts/export-bfa-case-policy-parity.sh",
+    "AUTH_TEST_MODE=true ./scripts/pytest.sh tests/bfa_case_policy_parity/ -q",
+    "./scripts/export-bfa-case-policy-parity.sh --check"
+  ],
+  "vector_ids": [
+    "capture_bound_thread_denied",
+    "capture_handoff_grant_replay_confirm",
+    "capture_held_exempt_submit",
+    "cms_orchestration_headless_held_deny",
+    "cms_orchestration_headless_open_allow",
+    "grant_lane_a_tool_mismatch",
+    "grant_lane_a_turn_invalid",
+    "grant_lane_a_turn_missing",
+    "grant_lane_a_turn_replay",
+    "hold_headless_cms_unavailable",
+    "hold_headless_held_case_on_hold",
+    "ordering_grant_before_scope_deny",
+    "ordering_scope_deny_no_mutation",
+    "scope_headless_closed_case_not_active",
+    "scope_headless_cms_unavailable",
+    "scope_headless_hold_no_capture_recovery",
+    "scope_headless_invalid_uuid_thread_not_bound",
+    "scope_headless_missing_case_thread_not_bound",
+    "scope_headless_open_query_allow",
+    "scope_headless_unknown_case_plain_detail",
+    "scope_interactive_missing_case_thread_not_bound"
+  ]
+}

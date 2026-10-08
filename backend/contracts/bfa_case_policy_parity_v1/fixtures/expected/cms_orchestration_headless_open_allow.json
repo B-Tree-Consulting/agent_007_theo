@@ -1,0 +1,9 @@
+{
+  "decision": "allow",
+  "http_status": 200,
+  "response_shape": "invoke_success_body",
+  "side_effects": {
+    "case_mutated": false,
+    "grant_verify_count": 0
+  }
+}

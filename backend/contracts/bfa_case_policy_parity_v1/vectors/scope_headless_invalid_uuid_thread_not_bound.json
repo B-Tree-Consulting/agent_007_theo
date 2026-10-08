@@ -1,0 +1,22 @@
+{
+  "vector_id": "scope_headless_invalid_uuid_thread_not_bound",
+  "classification": "discrepancy_frozen",
+  "applicability": [
+    "reference_host"
+  ],
+  "tool_role": {
+    "role_id": "bounded_query_low_execute",
+    "tool_kind": "query",
+    "risk": "low",
+    "case_scope": "active_open_case",
+    "invoke_phase": "execute",
+    "flow": "direct_execute"
+  },
+  "hub_reference": "case-scope-policy-parity.md \u2014 Autonomous/headless caller surface",
+  "discrepancy_issue": "https://github.com/B-Tree-Consulting/b-tree-aydeo_be/issues/331",
+  "setup": {
+    "caller_surface": "headless",
+    "case_state": "none",
+    "envelope_case_id": "invalid_uuid"
+  }
+}

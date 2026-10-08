@@ -1,0 +1,23 @@
+{
+  "vector_id": "scope_interactive_missing_case_thread_not_bound",
+  "classification": "parity_aligned",
+  "applicability": [
+    "shared_engine",
+    "reference_host"
+  ],
+  "tool_role": {
+    "role_id": "bounded_query_low_execute",
+    "tool_kind": "query",
+    "risk": "low",
+    "case_scope": "active_open_case",
+    "invoke_phase": "execute",
+    "flow": "direct_execute"
+  },
+  "hub_reference": "case-scope-policy-parity.md \u2014 Interactive binding",
+  "discrepancy_issue": null,
+  "setup": {
+    "caller_surface": "interactive",
+    "case_state": "none",
+    "envelope_case_id": "missing"
+  }
+}

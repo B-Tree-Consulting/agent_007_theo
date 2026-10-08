@@ -1,0 +1,12 @@
+{
+  "decision": "deny",
+  "http_status": 403,
+  "response_shape": "plain_detail",
+  "error": {
+    "message": "pre-invoke policy verification failed"
+  },
+  "side_effects": {
+    "case_mutated": false,
+    "grant_verify_count": 0
+  }
+}

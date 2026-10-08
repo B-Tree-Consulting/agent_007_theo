@@ -1,0 +1,24 @@
+{
+  "vector_id": "grant_lane_a_turn_invalid",
+  "classification": "parity_aligned",
+  "applicability": [
+    "shared_engine",
+    "reference_host"
+  ],
+  "tool_role": {
+    "role_id": "action_low_reference_execute",
+    "tool_kind": "action_factory",
+    "risk": "low",
+    "case_scope": "active_open_case",
+    "invoke_phase": "execute",
+    "flow": "direct_execute"
+  },
+  "hub_reference": "case-scope-policy-parity.md \u2014 Lane A invalid grant",
+  "discrepancy_issue": null,
+  "setup": {
+    "caller_surface": "interactive",
+    "case_state": "open",
+    "envelope_case_id": "dynamic",
+    "grant_mode": "invalid"
+  }
+}

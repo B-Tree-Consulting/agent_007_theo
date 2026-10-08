@@ -1,0 +1,22 @@
+{
+  "vector_id": "capture_handoff_grant_replay_confirm",
+  "classification": "parity_aligned",
+  "applicability": [
+    "reference_host"
+  ],
+  "tool_role": {
+    "role_id": "capture_intent_medium_submit",
+    "tool_kind": "action_factory",
+    "risk": "medium",
+    "case_scope": "capture_intent",
+    "invoke_phase": "confirm",
+    "flow": "confirm_execute"
+  },
+  "hub_reference": "case-scope-policy-parity.md \u2014 Lane A handoff replay on confirm",
+  "discrepancy_issue": null,
+  "setup": {
+    "caller_surface": "capture_confirm_replay",
+    "case_state": "none",
+    "envelope_case_id": "missing"
+  }
+}

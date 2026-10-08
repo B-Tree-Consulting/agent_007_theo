@@ -1,0 +1,84 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+.obsidian/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+backend/.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment variables
+.env
+.env.local
+.env.demo
+backend/.env.demo.example
+
+# Demo operator scripts stay local (Azure resource names). Tag file is local only.
+infra/
+infra/scripts/.demo-last-bfa-host-tag
+
+# Database
+*.db
+*.sqlite
+
+# Logs
+*.log
+
+# Testing
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+
+# Docker volumes
+postgres_data/
+keycloak_data/
+
+# Local dev SecretStore (may contain LLM API keys); keep README only
+.secrets/*
+!.secrets/README.md
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor agent config (local only)
+.cursor/
+
+# Local sparse checkout of Hub knowledge (never commit)
+.knowledge/
+
+# Docker build vendor copy of agentstepkit (scripts/prepare-vendor-kit.sh)
+backend/vendor/agentstepkit/
+# Docker build vendor copy of aydeo-audit-sdk (scripts/prepare-vendor-audit-sdk.sh)
+backend/vendor/aydeo_audit_sdk/

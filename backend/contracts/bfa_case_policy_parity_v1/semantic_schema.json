@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "allowed_expectation_fields": [
+    "decision",
+    "http_status",
+    "error.code",
+    "error.message",
+    "recovery.action",
+    "recovery.hint",
+    "recovery.absent",
+    "response_shape",
+    "side_effects.case_mutated",
+    "side_effects.grant_consumed",
+    "side_effects.grant_verify_count",
+    "side_effects.outbox_written",
+    "assertion_ids"
+  ],
+  "response_shape_values": [
+    "policy_nested",
+    "plain_detail",
+    "action_assertion",
+    "invoke_success_body"
+  ],
+  "decision_values": ["allow", "deny"]
+}
