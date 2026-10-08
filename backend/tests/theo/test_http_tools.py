@@ -138,9 +138,9 @@ def test_incomplete_limit_is_field_level_422(
     )
     assert response.status_code == 422, response.text
     assert not fake_t212.placed
-    locs = [item["loc"] for item in response.json()["detail"]]
-    assert ["limit_price"] in locs
-    assert ["time_validity"] in locs
+    fields = {item["field"] for item in response.json()["error"]["details"]["fields"]}
+    assert "limit_price" in fields
+    assert "time_validity" in fields
 
 
 def test_large_order_defers_without_broker_call(
@@ -324,10 +324,10 @@ def test_zero_prices_are_field_level_422(
         },
     )
     assert response.status_code == 422, response.text
-    locs = [item["loc"] for item in response.json()["detail"]]
-    assert ["limit_price"] in locs
-    assert ["stop_price"] in locs
-    assert all("request_id" not in loc for loc in locs)
+    fields = {item["field"] for item in response.json()["error"]["details"]["fields"]}
+    assert "limit_price" in fields
+    assert "stop_price" in fields
+    assert "request_id" not in fields
 
 
 def test_same_correlation_posts_once_and_stores_server_uuid(
@@ -609,24 +609,22 @@ def test_confirm_stores_approval_record_id(
     assert row.approval_record_id == "apr-record-1"
 
 
-def test_missing_fx_fails_account_summary_invoke(
+def test_account_summary_succeeds_when_fx_source_is_down(
     client: TestClient,
     de_id: str,
     sample_capability_token: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def _down():
+    async def _down(*_args, **_kwargs):
         raise RuntimeError("cnb down")
 
-    monkeypatch.setattr("src.theo.snapshot.load_usd_fixing", _down)
+    monkeypatch.setattr("src.theo.snapshot.load_fixing", _down)
     body = invoke_tool(
         client,
         _headers(de_id, sample_capability_token),
         {"tool_name": "get_account_summary", "tool_version": TOOL_VERSION, "inputs": {}},
     )
-    assert body["status"] == "failed", body
-    ids = {item.get("id") for item in body.get("assertions") or []}
-    assert "fx_unavailable" in ids
+    assert body["status"] == "succeeded", body
 
 
 def test_off_whitelist_research_fails_invoke(
@@ -645,7 +643,7 @@ def test_off_whitelist_research_fails_invoke(
     )
     assert body["status"] == "failed", body
     ids = {item.get("id") for item in body.get("assertions") or []}
-    assert "whitelist_rejected" in ids
+    assert "research_not_permitted" in ids
 
 
 def test_correlation_unique_race_replays_or_conflicts(
@@ -750,3 +748,122 @@ def test_review_portfolio_broker_rate_limit_fails_invoke(
     ids = {item.get("id") for item in body.get("assertions") or []}
     assert "broker_rejected" in ids
     assert recorded_case_comments == []
+
+
+def test_broker_rejection_is_returned_and_a_later_proposal_still_confirms(
+    client: TestClient,
+    de_id: str,
+    sample_capability_token: str,
+    fake_t212: FakeT212,
+) -> None:
+    broker_body = '{"type":"/api-errors/instrument-invisible","detail":"Instrument can not be traded."}'
+    original = fake_t212.place_order
+    calls = {"n": 0}
+
+    async def place(inputs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise TheoError(BROKER_REJECTED, broker_body)
+        return await original(inputs)
+
+    fake_t212.place_order = place
+    headers = _headers(de_id, sample_capability_token)
+    rationale = "Concentrated add to a core holding after the review."
+    inputs = _market_buy("30", rationale=rationale)
+    submitted = _invoke_order(
+        client,
+        headers,
+        "place_large_market_equity_order",
+        inputs,
+        correlation_id="cid-broker-old",
+    )
+    plan_token = assert_deferred(submitted, "needs-superior-defer")
+    rejected = _invoke_order(
+        client,
+        headers,
+        "place_large_market_equity_order",
+        inputs,
+        correlation_id="cid-broker-old",
+        phase="confirm",
+        plan_token=plan_token,
+    )
+    assert rejected["status"] == "failed", rejected
+    assert rejected["outputs"]["broker_response"] == broker_body
+    assert calls["n"] == 1
+
+    again = _invoke_order(
+        client,
+        headers,
+        "place_large_market_equity_order",
+        inputs,
+        correlation_id="cid-broker-old",
+        phase="confirm",
+        plan_token=plan_token,
+    )
+    assert again["status"] == "failed", again
+    assert again["outputs"]["broker_response"] == broker_body
+    assert calls["n"] == 1
+
+    listed = invoke_tool(
+        client,
+        headers,
+        {"tool_name": "get_trade_intents", "tool_version": TOOL_VERSION, "inputs": {}},
+    )
+    failed = [row for row in listed["outputs"]["intents"] if row["status"] == "failed"]
+    assert failed
+    assert failed[0]["error_code"] == "broker_rejected"
+    assert failed[0]["broker_message"] == broker_body
+
+    reviewed = invoke_tool(
+        client,
+        headers,
+        {
+            "tool_name": "review_portfolio",
+            "tool_version": TOOL_VERSION,
+            "inputs": {"include_research": False},
+        },
+    )
+    assert reviewed["status"] == "succeeded", reviewed
+
+    resubmitted = _invoke_order(
+        client,
+        headers,
+        "place_large_market_equity_order",
+        inputs,
+        correlation_id="cid-broker-new",
+    )
+    new_token = assert_deferred(resubmitted, "needs-superior-defer")
+    assert new_token == plan_token
+    confirmed = _invoke_order(
+        client,
+        headers,
+        "place_large_market_equity_order",
+        inputs,
+        correlation_id="cid-broker-new",
+        phase="confirm",
+        plan_token=new_token,
+    )
+    assert confirmed["status"] == "succeeded", confirmed
+    assert calls["n"] == 2
+    assert len(fake_t212.placed) == 1
+
+
+def test_confirm_without_a_proposal_has_no_broker_body(
+    client: TestClient,
+    de_id: str,
+    sample_capability_token: str,
+) -> None:
+    headers = _headers(de_id, sample_capability_token)
+    confirmed = _invoke_order(
+        client,
+        headers,
+        "place_large_market_equity_order",
+        _market_buy("30", rationale="Concentrated add to a core holding after the review."),
+        correlation_id="cid-no-proposal",
+        phase="confirm",
+        plan_token="missing-plan-token",
+    )
+    assert confirmed["status"] == "failed", confirmed
+    assert confirmed["outputs"] == {}
+    evidence = " ".join(item.get("evidence") or "" for item in confirmed["assertions"])
+    assert "No open proposal matches this confirm" in evidence

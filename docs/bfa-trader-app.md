@@ -84,7 +84,7 @@ Tool input schemas contain only the fields in the catalog tables. They do **not*
 
 Every DE-visible input field has a description. The catalog exports that schema.
 
-`quantity`, `limit_price`, and `stop_price` must be **greater than zero**. The host still sends a negative quantity to Trading 212 for sells. A missing required field, or a number that is not greater than zero, is HTTP **422** and nothing is stored. `detail` is a list of `{type, loc, msg}`. `loc` is a list of strings naming the input field (for example `["limit_price"]`). `input` is present only when that value is JSON-safe: string, number, bool, or null. A missing, empty, or non-list `errors` payload is not stringified into the message. Unknown tool stays HTTP **404**. Policy, auth, and host-unavailable responses stay as they are.
+`quantity`, `limit_price`, and `stop_price` must be **greater than zero**. The host still sends a negative quantity to Trading 212 for sells. A missing required field, or a number that is not greater than zero, is HTTP **422** and nothing is stored. The body is `error.details.fields`, a list of `{field, reason}` the form binds to the matching input (for example `quantity`). A missing, empty, or non-list `errors` payload is not stringified into the message. Unknown tool stays HTTP **404**. Policy, auth, and host-unavailable responses stay as they are.
 
 A business precondition on a query is an `assert_that.pre` guard with a stable code, not an exception raised inside the handler. That includes a missing FX fixing (`fx_unavailable`), a missing `broker_last` (`quote_unavailable`), and `get_title_research` for a ticker that is neither on the whitelist nor currently held (`research_not_permitted`).
 
@@ -261,7 +261,7 @@ Every refusal comes back with a reason: off the whitelist, not enough cash, more
 | Code | Meaning |
 | --- | --- |
 | `validation_error` | Incomplete canonical payload or missing case |
-| HTTP 422 | Schema failure on a typed tool. `detail` is a list of `{type, loc, msg}`. `loc` names the field. Covers a missing field and a `quantity`, `limit_price`, or `stop_price` that is not greater than zero. Nothing stored. |
+| HTTP 422 | Schema failure on a typed tool. `error.details.fields` is `{field, reason}` for each input. Covers a missing field and a `quantity`, `limit_price`, or `stop_price` that is not greater than zero. Nothing stored. |
 | `approval_required` | Used a low-risk place tool above `approval_notional_czk`. Names the `place_large_*` twin. Preflight: no attention item. |
 | `large_proposal_pending` | Low-risk `place_*` for a ticker that already has an undecided large proposal. Nothing is sent. |
 | `below_approval_threshold` | Used a large tool at or under the gate. Names the low-risk twin. Preflight: no attention item. |
@@ -503,7 +503,7 @@ Every refusal comes back with a reason: off the whitelist, not enough cash, more
 | Code | Meaning |
 | --- | --- |
 | `validation_error` | Incomplete canonical payload or missing case |
-| HTTP 422 | Missing schema-required field on a typed tool |
+| HTTP 422 | Schema failure. `error.details.fields` names each invalid input. Nothing stored. |
 | `approval_required` | Used a low-risk place tool above 10 000 CZK |
 | `below_approval_threshold` | Used a large tool at or under the gate |
 | `whitelist_rejected` / `whitelist_empty` | Buy not permitted |

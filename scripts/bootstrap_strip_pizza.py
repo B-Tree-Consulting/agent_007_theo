@@ -145,6 +145,7 @@ _DELETE_RELATIVE = (
     "backend/tests/host/test_bfa_host.py",
     "backend/tests/host/test_flow_helpers.py",
     "backend/tests/host/flow_helpers.py",
+    "backend/tests/host/test_order_case_comment_flow.py",
 )
 
 _PIZZA_PHRASES: tuple[tuple[str, str], ...] = (

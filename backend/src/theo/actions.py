@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Literal
@@ -99,6 +101,38 @@ class CaseComments:
 
 def _fail(code: str, message: str) -> tuple[bool, str]:
     return False, f"{code}: {message}"
+
+
+def _publish_execution_broker_response(confirmed: ConfirmResult) -> None:
+    """Copy the broker body onto the tool outputs for the execution result."""
+    result = getattr(confirmed, "result", None)
+    if result is None:
+        return
+    detail = None
+    for item in getattr(result, "assertions", None) or []:
+        evidence = str(getattr(item, "evidence", "") or "")
+        if getattr(item, "id", None) == "effect-error" and "post_broker_order" in evidence:
+            marker = "raised: "
+            detail = evidence.split(marker, 1)[1] if marker in evidence else evidence
+            break
+    if not detail:
+        return
+    current = getattr(result, "outputs", None)
+    payload = dict(current) if isinstance(current, dict) else {}
+    payload["broker_response"] = detail
+    result.outputs = payload
+
+
+def _at_or_under_approval_threshold(inputs: Any, facts: OrderFacts) -> bool | None:
+    book = facts.book
+    notional_for = getattr(book, "notional_for", None)
+    attention = getattr(book, "attention_notional", None)
+    if book is None or notional_for is None or attention is None:
+        return None
+    notional = notional_for(_canonical(inputs))
+    if notional is None:
+        return None
+    return bool(notional <= attention)
 
 
 def _book(facts: Any, guard_facts: dict | None) -> BookSnapshot | None:
@@ -308,24 +342,28 @@ class OrderActionBase(Action[OrderInput, OrderFacts]):
         self.scope.case_id = kwargs.get("case_id") or get_invoke_case_id()
         case_id = self.scope.case_id
         order = _canonical(inputs)
-        row = intent_store.get_by_plan_token(case_id, plan_token) if case_id and plan_token else None
+        token_row = intent_store.get_by_plan_token(case_id, plan_token) if case_id and plan_token else None
+        intent_row = self._intent(order)
+        row = token_row if token_row is not None and token_row.status == "awaiting_approval" else intent_row
         if row is None:
-            row = self._intent(order)
+            row = token_row
         if row is not None and row.payload_hash != intent_store.payload_hash(order):
             row = None
         if row is not None and row.status == "executed" and row.t212_order_id:
             return self._confirm_replay(row)
         if row is None or row.status != "awaiting_approval":
-            return self._confirm_rejected()
+            return self._confirm_rejected(getattr(row, "broker_message", None))
         approval_id = get_invoke_approval_record_id()
         if approval_id:
             intent_store.set_approval_record(row.id, approval_id)
             row.approval_record_id = approval_id[:128]
         self._bound_intent = row
         try:
-            return await super().confirm(plan_token, inputs, **kwargs)
+            confirmed = await super().confirm(plan_token, inputs, **kwargs)
         finally:
             self._bound_intent = None
+        _publish_execution_broker_response(confirmed)
+        return confirmed
 
     def _confirm_replay(self, row: Any) -> ConfirmResult:
         result = ExecuteResult(
@@ -337,7 +375,10 @@ class OrderActionBase(Action[OrderInput, OrderFacts]):
         )
         return ConfirmResult(status=ConfirmStatus.SUCCEEDED, result=result)
 
-    def _confirm_rejected(self) -> ConfirmResult:
+    def _confirm_rejected(self, broker_response: str | None = None) -> ConfirmResult:
+        outputs: dict[str, Any] = {}
+        if broker_response:
+            outputs["broker_response"] = broker_response
         result = ExecuteResult(
             status="failed",
             correlation_id=self._correlation() or "confirm",
@@ -348,10 +389,10 @@ class OrderActionBase(Action[OrderInput, OrderFacts]):
                     kind="pre",
                     severity="blocker",
                     status="failed",
-                    evidence="No open proposal matches this confirm",
+                    evidence=broker_response or "No open proposal matches this confirm",
                 )
             ],
-            outputs={},
+            outputs=outputs,
         )
         return ConfirmResult(status=ConfirmStatus.FAILED, reason="preconditions_failed", result=result)
 
@@ -548,6 +589,17 @@ class OrderActionBase(Action[OrderInput, OrderFacts]):
         plan.step(self.comment_placed, inputs=inputs, risk="low")
         return plan.to_list()
 
+    def _plan_token(self, inputs: OrderInput, facts: OrderFacts, steps: list) -> str:
+        # Confirm rejects a changed token. The live price is not frozen: only
+        # whether the order is at or under the approval gate. Guards re-check the book.
+        payload = {
+            "action": f"{self.name}@{self.version}",
+            "inputs": json.loads(inputs.model_dump_json()),
+            "steps": [step.name for step in steps],
+            "at_or_under_approval_threshold": _at_or_under_approval_threshold(inputs, facts),
+        }
+        return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
 
 async def _reconcile_dispatch(inputs: OrderInput, row: Any) -> str | None:
     client = get_t212_client()
@@ -692,6 +744,7 @@ class ReviewPortfolio(Action):
                     submitted_at=row.submitted_at,
                     t212_order_id=row.t212_order_id,
                     error_code=row.error_code,
+                    broker_message=row.broker_message,
                 )
                 for row in intent_store.list_for_case(case_id, limit=50)
             ]

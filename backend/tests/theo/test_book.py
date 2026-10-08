@@ -186,3 +186,136 @@ def test_fresh_dispatch_still_places(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert order_id == "101"
     assert len(fake.placed) == 1
+
+
+def test_t212_retries_rate_limit_then_reads_cash() -> None:
+    import time
+
+    import httpx
+
+    from src.theo.clients.t212 import T212Client
+
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(
+                429,
+                headers={"x-ratelimit-reset": str(int(time.time()) - 1)},
+                json={"message": "Too Many Requests"},
+            )
+        return httpx.Response(200, json={"free": "10", "invested": "0", "total": "10"})
+
+    client = T212Client(
+        base_url="https://demo.trading212.com/api/v0",
+        api_key="k",
+        api_secret="s",
+        transport=httpx.MockTransport(handler),
+    )
+    cash = asyncio.run(client.account_cash())
+    assert cash["free"] == Decimal("10")
+    assert calls["n"] == 2
+
+
+def test_place_order_error_keeps_broker_body_and_reads_stay_short() -> None:
+    import httpx
+
+    from src.theo.clients.t212 import T212Client
+    from src.theo.errors import TheoError
+    from src.theo.schemas import MarketOrderInput, Side
+
+    body = '{"code":"instrument-not-tradable","detail":"QQQ_EQ is not open"}'
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, text=body)
+
+    client = T212Client(
+        base_url="https://demo.trading212.com/api/v0",
+        api_key="k",
+        api_secret="s",
+        transport=httpx.MockTransport(handler),
+    )
+    order = MarketOrderInput(ticker="QQQ_EQ", side=Side.buy, quantity=Decimal("1")).to_order_input()
+    try:
+        asyncio.run(client.place_order(order))
+    except TheoError as exc:
+        assert body in exc.message
+    else:
+        raise AssertionError("place_order should reject")
+    try:
+        asyncio.run(client.account_cash())
+    except TheoError as exc:
+        assert exc.message == "Bad Request"
+        assert "instrument-not-tradable" not in exc.message
+    else:
+        raise AssertionError("account_cash should reject")
+
+
+def test_publish_execution_broker_response_copies_only_the_step_failure() -> None:
+    from src.theo.actions import _publish_execution_broker_response
+
+    _publish_execution_broker_response(SimpleNamespace(result=None))
+    untouched = SimpleNamespace(assertions=[], outputs=None)
+    _publish_execution_broker_response(SimpleNamespace(result=untouched))
+    assert untouched.outputs is None
+
+    merged = SimpleNamespace(
+        assertions=[SimpleNamespace(id="effect-error", evidence="post_broker_order blew up")],
+        outputs={"keep": 1},
+    )
+    _publish_execution_broker_response(SimpleNamespace(result=merged))
+    assert merged.outputs == {"keep": 1, "broker_response": "post_broker_order blew up"}
+
+    wrapped = SimpleNamespace(
+        assertions=[
+            SimpleNamespace(id="other", evidence="no"),
+            SimpleNamespace(id="effect-error", evidence="Step 'post_broker_order' raised: BODY"),
+        ],
+        outputs=None,
+    )
+    _publish_execution_broker_response(SimpleNamespace(result=wrapped))
+    assert wrapped.outputs == {"broker_response": "BODY"}
+
+
+def test_plan_token_ignores_price_drift_on_the_same_side_of_the_gate() -> None:
+    from src.theo.actions import PLACE_ACTIONS, OrderFacts
+    from src.theo.snapshot import BookSnapshot
+
+    action = PLACE_ACTIONS["place_large_market_equity_order"](comments=None)
+    order = _market()
+    steps = [SimpleNamespace(name="post_broker_order")]
+
+    def token(last_price: str) -> str:
+        book = BookSnapshot(
+            positions=[],
+            orders=[],
+            cash_free=Decimal("100000"),
+            cash_invested=Decimal("0"),
+            cash_total=Decimal("100000"),
+            fx_czk_per_unit=Decimal("20"),
+            fx_date=None,
+            fx_source=None,
+            last_price=Decimal(last_price),
+            quote_source="test",
+            whitelist=(),
+            max_positions=10,
+            attention_notional=Decimal("10000"),
+            environment="demo",
+        )
+        return action._plan_token(order, OrderFacts(book=book), steps)
+
+    # 1 share * 400 * 20 = 8_000 CZK, still under 10_000. 600 * 20 = 12_000, over the gate.
+    under_a = token("400")
+    under_b = token("450")
+    over = token("600")
+    assert under_a == under_b
+    assert under_a != over
+
+    from src.theo.actions import _at_or_under_approval_threshold
+
+    assert _at_or_under_approval_threshold(order, OrderFacts()) is None
+    assert _at_or_under_approval_threshold(order, OrderFacts(book=SimpleNamespace())) is None
+    blind = SimpleNamespace(notional_for=lambda _order: None, attention_notional=Decimal("10000"))
+    assert _at_or_under_approval_threshold(order, OrderFacts(book=blind)) is None

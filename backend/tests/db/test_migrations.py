@@ -14,7 +14,7 @@ def _cfg() -> Config:
     return cfg
 
 
-HEAD_REVISION = "0001_empty"
+HEAD_REVISION = "0003_intent_correlation"
 
 
 def test_upgrade_from_empty_records_revision() -> None:

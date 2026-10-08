@@ -39,6 +39,26 @@ def validation_error_detail(errors: Any) -> list[dict[str, Any]] | None:
     return detail
 
 
+def profile_field_errors(detail: list[Any]) -> list[dict[str, str]]:
+    """Map a 422 detail list onto the form fields Chat highlights."""
+    fields: list[dict[str, str]] = []
+    for item in detail:
+        if not isinstance(item, dict):
+            continue
+        loc = item.get("loc") or []
+        if isinstance(loc, str):
+            loc = [loc]
+        parts = [str(part) for part in loc if str(part) not in {"body", "inputs"}]
+        if not parts:
+            continue
+        reason = str(item.get("msg") or "Invalid value").strip()
+        prefix = "value error, "
+        if reason.lower().startswith(prefix):
+            reason = reason[len(prefix) :].strip() or reason
+        fields.append({"field": parts[-1], "reason": reason})
+    return fields
+
+
 def raise_for_host_response(
     resp: HostResponse,
     *,

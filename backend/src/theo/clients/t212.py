@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
@@ -53,12 +54,23 @@ class T212Client:
     async def aclose(self) -> None:
         await self._client.aclose()
 
-    async def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+    async def _request(self, method: str, path: str, *, disclose_body: bool = False, **kwargs: Any) -> httpx.Response:
+        optional = path.split("?", 1)[0].startswith("/equity/metadata/")
+        max_attempts = 1 if optional else 4
         async with self._lock:
-            response = await self._client.request(method, path, **kwargs)
+            attempt = 0
+            while True:
+                attempt += 1
+                response = await self._client.request(method, path, **kwargs)
+                if response.status_code != 429 or attempt >= max_attempts:
+                    break
+                wait = _retry_wait_seconds(response)
+                if wait > 0:
+                    await asyncio.sleep(wait)
         if response.status_code >= 400:
             log.warning("t212 %s %s -> %s", method, path, response.status_code)
-            raise TheoError(BROKER_REJECTED, _safe_broker_message(response))
+            message = _full_broker_message(response) if disclose_body else _safe_broker_message(response)
+            raise TheoError(BROKER_REJECTED, message)
         return response
 
     async def _get_json(self, path: str) -> Any:
@@ -129,7 +141,7 @@ class T212Client:
             OrderType.stop: "/equity/orders/stop",
             OrderType.stop_limit: "/equity/orders/stop_limit",
         }[inputs.order_type]
-        data = (await self._request("POST", endpoint, json=body)).json()
+        data = (await self._request("POST", endpoint, json=body, disclose_body=True)).json()
         order_id = data.get("id") or data.get("orderId")
         if order_id is None:
             raise TheoError(BROKER_REJECTED, "Broker accepted the order but returned no id")
@@ -233,6 +245,32 @@ def _opt_dec(value: Any) -> Decimal | None:
     if value is None:
         return None
     return Decimal(str(value))
+
+
+def _retry_wait_seconds(response: httpx.Response) -> float:
+    reset = response.headers.get("x-ratelimit-reset")
+    if reset:
+        try:
+            wait = float(reset) - time.time()
+            if wait > 0:
+                return min(wait + 0.1, 8.0)
+            return 0.0
+        except ValueError:
+            pass
+    retry_after = response.headers.get("Retry-After")
+    if retry_after:
+        try:
+            return min(max(float(retry_after), 0.0), 8.0)
+        except ValueError:
+            pass
+    return 1.0
+
+
+def _full_broker_message(response: httpx.Response) -> str:
+    text = (response.text or "").strip()
+    if text:
+        return text[:4000]
+    return _safe_broker_message(response)
 
 
 def _safe_broker_message(response: httpx.Response) -> str:

@@ -15,14 +15,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATE_ROOT=""
 
-TEMPLATE_REPO_NAME="b-tree-bfa-host-sample"
-TEMPLATE_SLUG="bfa-host-sample"
-TEMPLATE_PYPROJECT="bfa-host-sample-backend"
-TEMPLATE_VOLUME_PREFIX="bfa_host_sample"
-TEMPLATE_POSTMAN_ENV_ID="bfa-host-sample-local"
-TEMPLATE_API_TITLE="AyDEO BFA Host Sample API"
-TEMPLATE_POSTMAN_NAME="AyDEO BFA Host Sample"
-TEMPLATE_README_H1="AyDEO BFA Host Sample"
+TEMPLATE_REPO_NAME="agent_007_theo"
+TEMPLATE_SLUG="agent-007-theo"
+TEMPLATE_PYPROJECT="agent-007-theo-backend"
+TEMPLATE_VOLUME_PREFIX="agent_007_theo"
+TEMPLATE_POSTMAN_ENV_ID="agent-007-theo-local"
+TEMPLATE_API_TITLE="AyDEO agent-007-theo API"
+TEMPLATE_POSTMAN_NAME="AyDEO agent-007-theo"
+TEMPLATE_README_H1="AyDEO agent-007-theo"
 
 INVOCATION_CWD="$(pwd)"
 
