@@ -219,6 +219,142 @@ def test_t212_retries_rate_limit_then_reads_cash() -> None:
     assert calls["n"] == 2
 
 
+def test_metadata_instruments_is_cached_for_five_minutes(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    from src.theo.clients.t212 import T212Client
+
+    calls = {"n": 0}
+    clock = {"t": 1_000.0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        calls["n"] += 1
+        return httpx.Response(200, json=[{"ticker": "AAPL_US_EQ", "currencyCode": "USD"}])
+
+    monkeypatch.setattr("src.theo.clients.t212.time.monotonic", lambda: clock["t"])
+    client = T212Client(
+        base_url="https://demo.trading212.com/api/v0",
+        api_key="k",
+        api_secret="s",
+        transport=httpx.MockTransport(handler),
+    )
+
+    first = asyncio.run(client.metadata_instruments())
+    clock["t"] += 299
+    second = asyncio.run(client.metadata_instruments())
+    clock["t"] += 1
+    third = asyncio.run(client.metadata_instruments())
+
+    assert first[0]["ticker"] == "AAPL_US_EQ"
+    assert second[0]["ticker"] == "AAPL_US_EQ"
+    assert third[0]["ticker"] == "AAPL_US_EQ"
+    assert calls["n"] == 2
+
+
+def test_metadata_exchanges_is_cached_for_five_minutes(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    from src.theo.clients.t212 import T212Client
+
+    calls = {"n": 0}
+    clock = {"t": 1_000.0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        calls["n"] += 1
+        return httpx.Response(200, json=[{"id": 7, "name": "XNAS", "timeZone": "America/New_York"}])
+
+    monkeypatch.setattr("src.theo.clients.t212.time.monotonic", lambda: clock["t"])
+    client = T212Client(
+        base_url="https://demo.trading212.com/api/v0",
+        api_key="k",
+        api_secret="s",
+        transport=httpx.MockTransport(handler),
+    )
+
+    first = asyncio.run(client.metadata_exchanges())
+    clock["t"] += 299
+    second = asyncio.run(client.metadata_exchanges())
+    clock["t"] += 1
+    third = asyncio.run(client.metadata_exchanges())
+
+    assert first[0]["working_schedule_id"] == "7"
+    assert second[0]["name"] == "XNAS"
+    assert third[0]["timezone"] == "America/New_York"
+    assert calls["n"] == 2
+
+
+def test_metadata_exchanges_skips_a_bad_row_and_does_not_cache_a_failure() -> None:
+    import httpx
+
+    from src.theo.clients.t212 import T212Client
+    from src.theo.errors import TheoError
+
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(429, json={"message": "Too Many Requests"})
+        return httpx.Response(200, json={"items": [{"id": 7, "name": "XNAS"}, "skip-me"]})
+
+    client = T212Client(
+        base_url="https://demo.trading212.com/api/v0",
+        api_key="k",
+        api_secret="s",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(TheoError):
+        asyncio.run(client.metadata_exchanges())
+    rows = asyncio.run(client.metadata_exchanges())
+
+    assert calls["n"] == 2
+    assert [row["name"] for row in rows] == ["XNAS"]
+
+
+def test_metadata_exchanges_waiter_reuses_the_list_just_stored() -> None:
+    import httpx
+
+    from src.theo.clients.t212 import T212Client
+
+    class _Gate(httpx.AsyncBaseTransport):
+        def __init__(self) -> None:
+            self.calls = 0
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            del request
+            self.calls += 1
+            self.started.set()
+            await self.release.wait()
+            return httpx.Response(200, json=[{"id": 7, "name": "XNAS"}])
+
+    gate = _Gate()
+    client = T212Client(
+        base_url="https://demo.trading212.com/api/v0",
+        api_key="k",
+        api_secret="s",
+        transport=gate,
+    )
+
+    async def _run() -> None:
+        first = asyncio.create_task(client.metadata_exchanges())
+        await gate.started.wait()
+        second = asyncio.create_task(client.metadata_exchanges())
+        await asyncio.sleep(0)
+        gate.release.set()
+        rows_a, rows_b = await asyncio.gather(first, second)
+        assert rows_a[0]["name"] == "XNAS"
+        assert rows_b[0]["name"] == "XNAS"
+        assert gate.calls == 1
+
+    asyncio.run(_run())
+
+
 def test_place_order_error_keeps_broker_body_and_reads_stay_short() -> None:
     import httpx
 
