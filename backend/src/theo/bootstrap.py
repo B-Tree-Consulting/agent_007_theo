@@ -18,7 +18,7 @@ PLACE_DESCRIPTIONS = {
         "Place a market equity order on Trading 212 now at whatever the market gives, for a whitelisted "
         "ticker at a CZK value at or under the approval threshold. Need ticker, buy or sell, and share "
         "count. Do not use this for a priced order. If the user has not said market, ask; do not default "
-        "to it. Convert crowns to shares with get_account_summary. The order is sent immediately and "
+        "to it. If the user spoke in crowns, ask for a share count. The order is sent immediately and "
         "recorded as a case comment. It refuses an order worth more than the threshold (use "
         "place_large_market_equity_order), a buy off the whitelist or short of cash, a sell larger than "
         "the position, and a missing ticker, side, or quantity: ask rather than guessing."

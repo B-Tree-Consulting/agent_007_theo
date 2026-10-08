@@ -19,6 +19,8 @@ from src.theo.settings import t212_base_url, t212_environment
 
 log = logging.getLogger("theo.t212")
 
+_METADATA_CACHE_SECONDS = 300
+
 _TYPE_MAP = {
     "MARKET": OrderType.market,
     "LIMIT": OrderType.limit,
@@ -40,6 +42,12 @@ class T212Client:
         self.base_url = base_url.rstrip("/")
         self._auth = (api_key, api_secret)
         self._lock = asyncio.Lock()
+        self._instruments_lock = asyncio.Lock()
+        self._instruments_cached_at: float | None = None
+        self._instruments_cached: list[dict[str, Any]] | None = None
+        self._exchanges_lock = asyncio.Lock()
+        self._exchanges_cached_at: float | None = None
+        self._exchanges_cached: list[dict[str, Any]] | None = None
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
             auth=self._auth,
@@ -124,14 +132,52 @@ class T212Client:
         return [_map_order(row) for row in items]
 
     async def metadata_instruments(self) -> list[dict[str, Any]]:
-        data = await self._get_json("/equity/metadata/instruments")
-        rows = data if isinstance(data, list) else data.get("items") or []
-        return [_map_instrument(row) for row in rows if isinstance(row, dict)]
+        fresh = self._fresh_instruments(time.monotonic())
+        if fresh is not None:
+            return fresh
+        async with self._instruments_lock:
+            fresh = self._fresh_instruments(time.monotonic())
+            if fresh is not None:
+                return fresh
+            data = await self._get_json("/equity/metadata/instruments")
+            rows = data if isinstance(data, list) else data.get("items") or []
+            mapped = [_map_instrument(row) for row in rows if isinstance(row, dict)]
+            self._instruments_cached = mapped
+            self._instruments_cached_at = time.monotonic()
+            return list(mapped)
+
+    def _fresh_instruments(self, now: float) -> list[dict[str, Any]] | None:
+        cached = self._instruments_cached
+        cached_at = self._instruments_cached_at
+        if cached is None or cached_at is None:
+            return None
+        if now - cached_at >= _METADATA_CACHE_SECONDS:
+            return None
+        return list(cached)
 
     async def metadata_exchanges(self) -> list[dict[str, Any]]:
-        data = await self._get_json("/equity/metadata/exchanges")
-        rows = data if isinstance(data, list) else data.get("items") or []
-        return [_map_exchange(row) for row in rows if isinstance(row, dict)]
+        fresh = self._fresh_exchanges(time.monotonic())
+        if fresh is not None:
+            return fresh
+        async with self._exchanges_lock:
+            fresh = self._fresh_exchanges(time.monotonic())
+            if fresh is not None:
+                return fresh
+            data = await self._get_json("/equity/metadata/exchanges")
+            rows = data if isinstance(data, list) else data.get("items") or []
+            mapped = [_map_exchange(row) for row in rows if isinstance(row, dict)]
+            self._exchanges_cached = mapped
+            self._exchanges_cached_at = time.monotonic()
+            return list(mapped)
+
+    def _fresh_exchanges(self, now: float) -> list[dict[str, Any]] | None:
+        cached = self._exchanges_cached
+        cached_at = self._exchanges_cached_at
+        if cached is None or cached_at is None:
+            return None
+        if now - cached_at >= _METADATA_CACHE_SECONDS:
+            return None
+        return list(cached)
 
     async def place_order(self, inputs: OrderInput) -> str:
         body = _order_body(inputs)

@@ -86,8 +86,8 @@ SIDE_DESC = (
     "Ask if the user has not said which."
 )
 QUANTITY_DESC = (
-    "Number of shares, a positive multiple of get_instruments.quantity_step. Never a crown amount. "
-    "If the user spoke in crowns, convert with get_instruments and floor to quantity_step. Ask if missing."
+    "Number of shares, greater than zero. Never a crown amount. "
+    "If the user spoke in crowns, ask for the share count. The place tool checks the share step."
 )
 LIMIT_PRICE_DESC = (
     "Limit price per share in the instrument's currency. Ask the user; do not invent a price."

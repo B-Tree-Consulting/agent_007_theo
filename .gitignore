@@ -40,11 +40,9 @@ backend/.env
 .env
 .env.local
 .env.demo
-backend/.env.demo.example
 
-# Demo operator scripts stay local (Azure resource names). Tag file is local only.
-infra/
-infra/scripts/.demo-last-bfa-host-tag
+# Last ACR tag from infra/scripts/trader-build-push.sh (local only)
+infra/scripts/.trader-last-image-tag
 
 # Database
 *.db

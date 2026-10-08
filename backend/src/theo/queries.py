@@ -39,8 +39,8 @@ from src.shared.invoke_scope import get_invoke_case_id
 DESCRIPTIONS = {
     "get_account_summary": (
         "Read the Trading 212 account's cash available to trade, invested amount, and total equity. "
-        "Use this before any buy to check cash_available_czk. Share prices and the CZK rate for a name "
-        "come from get_instruments, not from this call. Returns no secrets."
+        "Use this before any buy to check cash_available_czk. This call does not carry a share price "
+        "or the crown rate. The place tool loads those. Returns no secrets."
     ),
     "get_portfolio": (
         "List the equity positions currently held on the account, each with quantity, average price, "
@@ -60,8 +60,8 @@ DESCRIPTIONS = {
     "get_instruments": (
         "List Trading 212 instrument records for names you care about: ticker, name, ISIN, type, currency, "
         "whether the name allows extended hours, max open quantity, quantity_step, broker_last, "
-        "fx_czk_per_unit, and working_schedule_id. broker_last is the price for a market notional and a "
-        "stop-side check. fx_czk_per_unit is crowns per one unit of that instrument's currency. With no "
+        "fx_czk_per_unit, and working_schedule_id. Do not call this to price or size an order; the place "
+        "tool does that. Use working_schedule_id with get_exchanges for the venue calendar. With no "
         "ticker, returns the whitelist plus names currently held, not the whole Trading 212 universe."
     ),
     "get_exchanges": (
@@ -72,7 +72,7 @@ DESCRIPTIONS = {
     "get_title_research": (
         "Gather free-tier market information about one ticker that is on the whitelist or currently held. "
         "Each block names its source. It contains no recommendation. Do not use its last price to choose "
-        "between a low-risk place tool and a large one; use get_instruments.broker_last."
+        "a place tool or to size an order. The place tool prices the order."
     ),
     "get_trade_intents": (
         "List the orders this BFA has recorded for the current case, including which are awaiting the "
