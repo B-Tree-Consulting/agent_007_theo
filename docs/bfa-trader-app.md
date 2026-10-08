@@ -250,7 +250,7 @@ CANCELLING
 cancel_equity_order withdraws an order still working at the broker, and only one this BFA placed. It cannot touch an order placed in the Trading 212 app or one that has already filled. Cancelling does not replace the order with anything.
 
 THE CASE RECORD
-These tools write their own case comments describing what they did. You do not pass comment text and you cannot change what they write. Do not duplicate a comment by hand, and do not assume one exists unless the tool reported it.
+These tools write their own case comments describing what they did. A send that fails is written on the case too. A refusal before the send is not. You do not pass comment text and you cannot change what they write. Do not duplicate a comment by hand, and do not assume one exists unless the tool reported it.
 
 WHEN SOMETHING IS REFUSED
 Every refusal comes back with a reason: off the whitelist, not enough cash, more than the position holds, too large without approval, a low-risk order while a large proposal for that ticker is still undecided, no price available, stop on the wrong side of the market, a field the schema rejected. Read it, tell the user plainly what stopped it, and fix the order or ask them. A refusal means nothing was traded. needs-superior-defer is not a refusal.
@@ -492,7 +492,7 @@ CANCELLING
 cancel_equity_order withdraws an order still working at the broker, and only one this BFA placed. It cannot touch an order placed in the Trading 212 app or one that has already filled. Cancelling does not replace the order with anything.
 
 THE CASE RECORD
-These tools write their own case comments describing what they did. You do not pass comment text and you cannot change what they write. Do not duplicate a comment by hand, and do not assume one exists unless the tool reported it.
+These tools write their own case comments describing what they did. A send that fails is written on the case too. A refusal before the send is not. You do not pass comment text and you cannot change what they write. Do not duplicate a comment by hand, and do not assume one exists unless the tool reported it.
 
 WHEN SOMETHING IS REFUSED
 Every refusal comes back with a reason: off the whitelist, not enough cash, more than the position holds, too large without approval, no price available, stop on the wrong side of the market. Read it, tell the user plainly what stopped it, and fix the order or ask them. A refusal means nothing was traded.
