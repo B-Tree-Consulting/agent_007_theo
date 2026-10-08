@@ -7,6 +7,7 @@ from sqlalchemy import engine_from_config, pool
 
 from src.config import get_settings
 from src.db.models import Base
+from src.theo.models import CnbFxFixing, EquityOrderIntent  # noqa: F401
 
 config = context.config
 

@@ -160,6 +160,33 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("BFA_INVOKE_DIAGNOSTIC_MODE"),
     )
 
+    t212_env: str = Field(default="demo", validation_alias=AliasChoices("T212_ENV"))
+    t212_live_enabled: bool = Field(default=False, validation_alias=AliasChoices("T212_LIVE_ENABLED"))
+    t212_api_key: str | None = Field(default=None, validation_alias=AliasChoices("T212_API_KEY"))
+    t212_api_secret: str | None = Field(default=None, validation_alias=AliasChoices("T212_API_SECRET"))
+
+    theo_whitelist: str = Field(default="", validation_alias=AliasChoices("THEO_WHITELIST"))
+    theo_whitelist_path: str | None = Field(
+        default="config/theo_whitelist.txt",
+        validation_alias=AliasChoices("THEO_WHITELIST_PATH"),
+    )
+    theo_max_positions: int = Field(default=20, validation_alias=AliasChoices("THEO_MAX_POSITIONS"))
+    theo_attention_notional: str = Field(default="10000", validation_alias=AliasChoices("THEO_ATTENTION_NOTIONAL"))
+    theo_intent_ttl: str = Field(default="24h", validation_alias=AliasChoices("THEO_INTENT_TTL"))
+    theo_cnb_fixing_url: str = Field(
+        default="https://www.cnb.cz/cs/financni-trhy/devizovy-trh/kurzy-devizoveho-trhu/kurzy-devizoveho-trhu/denni_kurz.txt",
+        validation_alias=AliasChoices("THEO_CNB_FIXING_URL"),
+    )
+    theo_finnhub_api_key: str | None = Field(default=None, validation_alias=AliasChoices("THEO_FINNHUB_API_KEY"))
+    theo_tiingo_api_key: str | None = Field(default=None, validation_alias=AliasChoices("THEO_TIINGO_API_KEY"))
+    theo_alpha_vantage_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("THEO_ALPHA_VANTAGE_API_KEY"),
+    )
+    theo_fred_api_key: str | None = Field(default=None, validation_alias=AliasChoices("THEO_FRED_API_KEY"))
+    theo_sec_user_agent: str | None = Field(default=None, validation_alias=AliasChoices("THEO_SEC_USER_AGENT"))
+    theo_symbol_overrides: str = Field(default="", validation_alias=AliasChoices("THEO_SYMBOL_OVERRIDES"))
+
     _resolved_aydeo_entra_api_client_id: UUID | None = PrivateAttr(default=None)
 
     @property
@@ -214,6 +241,36 @@ class Settings(BaseSettings):
         if s.startswith("<") and s.endswith(">"):
             return None
         return s
+
+    @field_validator("t212_env", mode="before")
+    @classmethod
+    def _normalize_t212_env(cls, v: object) -> str:
+        if v is None or not isinstance(v, str) or not v.strip():
+            return "demo"
+        s = v.strip().lower()
+        if s not in {"demo", "live"}:
+            raise ValueError("T212_ENV must be demo or live")
+        return s
+
+    @field_validator(
+        "t212_api_key",
+        "t212_api_secret",
+        "theo_whitelist_path",
+        "theo_finnhub_api_key",
+        "theo_tiingo_api_key",
+        "theo_alpha_vantage_api_key",
+        "theo_fred_api_key",
+        "theo_sec_user_agent",
+        mode="before",
+    )
+    @classmethod
+    def _normalize_theo_optional_secrets(cls, v: object) -> str | None:
+        if v is None:
+            return None
+        if not isinstance(v, str):
+            return v  # type: ignore[return-value]
+        s = v.strip()
+        return s or None
 
     @field_validator(
         "aydeo_audit_spool_path",
