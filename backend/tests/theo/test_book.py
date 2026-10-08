@@ -12,7 +12,7 @@ import pytest
 
 from src.theo.book import missing_order_fields, notional_czk, signed_quantity
 from src.theo.clients.cnb import parse_denni_kurz
-from src.theo.errors import BROKER_AMBIGUOUS, STOP_PRICE_INVALID, TheoError
+from src.theo.errors import BROKER_AMBIGUOUS, BROKER_REJECTED, STOP_PRICE_INVALID, TheoError, VALIDATION_ERROR
 from src.theo.schemas import LimitOrderInput, MarketOrderInput, OrderInput, OrderType, Side, TimeValidity
 from src.theo.symbol import vendor_symbol
 
@@ -107,13 +107,29 @@ def _market() -> OrderInput:
     return MarketOrderInput(ticker="AAPL_US_EQ", side=Side.buy, quantity=Decimal("1")).to_order_input()
 
 
+class _Comments:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, str]] = []
+
+    async def add_comment(self, *, case_id: str, body: str) -> None:
+        self.calls.append({"case_id": case_id, "body": body})
+
+
+def _place_action(comments: object | None = None):
+    from src.theo.actions import PLACE_ACTIONS
+
+    action = PLACE_ACTIONS["place_market_equity_order"](comments=comments)
+    action.scope.case_id = "case-1"
+    return action
+
+
 def test_unmatched_dispatch_retry_does_not_place_again(monkeypatch: pytest.MonkeyPatch) -> None:
     from tests.theo.fakes import FakeT212
 
-    from src.theo.actions import PLACE_ACTIONS
     from src.theo.stores import intents as intent_store
 
-    action = PLACE_ACTIONS["place_market_equity_order"](comments=None)
+    comments = _Comments()
+    action = _place_action(comments)
     row = _dispatch_row()
     fake = FakeT212()
     marked: list[tuple] = []
@@ -132,8 +148,162 @@ def test_unmatched_dispatch_retry_does_not_place_again(monkeypatch: pytest.Monke
         asyncio.run(action.post_broker_order(_market()))
 
     assert caught.value.code == BROKER_AMBIGUOUS
+    assert "could not be matched" in caught.value.message
     assert fake.placed == []
+    assert fake.cancelled == []
     assert marked == [(row.id, "failed", BROKER_AMBIGUOUS)]
+    assert len(comments.calls) == 1
+    assert comments.calls[0]["case_id"] == "case-1"
+    assert "Order was not placed" in comments.calls[0]["body"]
+    assert "broker_ambiguous" in comments.calls[0]["body"]
+
+
+def test_multi_match_dispatch_records_failure_comment(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.theo.fakes import FakeT212
+
+    from src.theo.stores import intents as intent_store
+
+    comments = _Comments()
+    action = _place_action(comments)
+    row = _dispatch_row()
+    fake = FakeT212()
+    match = {
+        "ticker": "AAPL_US_EQ",
+        "signed_quantity": Decimal("1"),
+        "created_at": row.submitted_at,
+    }
+    fake.orders.extend(
+        [
+            {**match, "t212_order_id": "1"},
+            {**match, "t212_order_id": "2"},
+        ]
+    )
+
+    monkeypatch.setattr(action, "_ensure_dispatching_row", lambda _inputs: row)
+    monkeypatch.setattr("src.theo.actions.get_t212_client", lambda: fake)
+    monkeypatch.setattr(intent_store, "mark_status", lambda *args, **kwargs: None)
+
+    with pytest.raises(TheoError) as caught:
+        asyncio.run(action.post_broker_order(_market()))
+
+    assert caught.value.code == BROKER_AMBIGUOUS
+    assert "More than one matching" in caught.value.message
+    assert fake.placed == []
+    assert fake.cancelled == []
+    assert len(comments.calls) == 1
+    assert "broker_ambiguous" in comments.calls[0]["body"]
+    assert "More than one matching" in comments.calls[0]["body"]
+
+
+def test_broker_reject_records_failure_comment(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.theo.fakes import FakeT212
+
+    from src.theo.stores import intents as intent_store
+
+    comments = _Comments()
+    action = _place_action(comments)
+    row = _dispatch_row()
+    fake = FakeT212()
+
+    async def _reject(_inputs):
+        raise TheoError(BROKER_REJECTED, "Too Many Requests")
+
+    fake.place_order = _reject
+
+    def _new(_inputs):
+        action._fresh_dispatch = True
+        return row
+
+    monkeypatch.setattr(action, "_ensure_dispatching_row", _new)
+    monkeypatch.setattr("src.theo.actions.get_t212_client", lambda: fake)
+    monkeypatch.setattr(intent_store, "mark_status", lambda *args, **kwargs: None)
+
+    with pytest.raises(TheoError) as caught:
+        asyncio.run(action.post_broker_order(_market()))
+
+    assert caught.value.code == BROKER_REJECTED
+    assert fake.cancelled == []
+    assert "Order was not placed" in comments.calls[0]["body"]
+    assert "broker_rejected" in comments.calls[0]["body"]
+    assert "Too Many Requests" in comments.calls[0]["body"]
+    assert "rationale" not in comments.calls[0]["body"]
+
+
+def test_failed_comment_error_does_not_replace_broker_code(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.theo.fakes import FakeT212
+
+    from src.theo.stores import intents as intent_store
+
+    class _Down:
+        async def add_comment(self, *, case_id: str, body: str) -> None:
+            del case_id, body
+            raise RuntimeError("cms down")
+
+    action = _place_action(_Down())
+    row = _dispatch_row()
+    fake = FakeT212()
+    marked: list[tuple] = []
+
+    async def _reject(_inputs):
+        raise TheoError(BROKER_REJECTED, "Too Many Requests")
+
+    fake.place_order = _reject
+
+    def _new(_inputs):
+        action._fresh_dispatch = True
+        return row
+
+    def _mark(intent_id, status, **kwargs):
+        marked.append((intent_id, status, kwargs.get("error_code")))
+
+    monkeypatch.setattr(action, "_ensure_dispatching_row", _new)
+    monkeypatch.setattr("src.theo.actions.get_t212_client", lambda: fake)
+    monkeypatch.setattr(intent_store, "mark_status", _mark)
+
+    with pytest.raises(TheoError) as caught:
+        asyncio.run(action.post_broker_order(_market()))
+
+    assert caught.value.code == BROKER_REJECTED
+    assert "cms down" not in str(caught.value)
+    assert fake.cancelled == []
+    assert marked == [(row.id, "failed", BROKER_REJECTED)]
+
+
+def test_comment_steps_require_case_id() -> None:
+    from src.theo.actions import PLACE_ACTIONS
+
+    comments = _Comments()
+    action = PLACE_ACTIONS["place_market_equity_order"](comments=comments)
+    order = _market()
+
+    with pytest.raises(TheoError) as placed:
+        asyncio.run(action.comment_placed(order))
+    assert placed.value.code == VALIDATION_ERROR
+
+    with pytest.raises(TheoError) as failed:
+        asyncio.run(action.comment_failed(order, code=BROKER_REJECTED, message="no"))
+    assert failed.value.code == VALIDATION_ERROR
+    assert comments.calls == []
+
+
+def test_comment_steps_use_invoke_case_id_when_scope_is_empty() -> None:
+    from src.shared.invoke_scope import bind_invoke_case_id
+    from src.theo.actions import PLACE_ACTIONS
+
+    comments = _Comments()
+    action = PLACE_ACTIONS["place_market_equity_order"](comments=comments)
+    assert action.scope.case_id is None
+    order = _market()
+
+    with bind_invoke_case_id("case-from-envelope"):
+        asyncio.run(action.comment_placed(order))
+        asyncio.run(action.comment_failed(order, code=BROKER_REJECTED, message="no"))
+
+    assert [call["case_id"] for call in comments.calls] == [
+        "case-from-envelope",
+        "case-from-envelope",
+    ]
+    assert "Order was not placed" in comments.calls[1]["body"]
 
 
 def test_matched_dispatch_retry_adopts_the_broker_order(monkeypatch: pytest.MonkeyPatch) -> None:

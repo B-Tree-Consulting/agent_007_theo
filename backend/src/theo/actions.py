@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Literal
@@ -30,6 +31,7 @@ from src.theo.comments import (
     render_approval_comment,
     render_cancelled_comment,
     render_compensation_fill_comment,
+    render_failed_comment,
     render_placed_comment,
 )
 from src.theo.errors import (
@@ -74,6 +76,7 @@ from src.theo.snapshot import BookSnapshot, load_order_snapshot
 from src.theo.stores import intents as intent_store
 
 AUTO_POLICY = ApprovalsPolicy(max_write_steps_auto=4, max_systems_auto=2, min_risk_for_auto="low")
+logger = logging.getLogger(__name__)
 
 PLACE_TOOL_TWINS = {
     "place_market_equity_order": "place_large_market_equity_order",
@@ -494,18 +497,25 @@ class OrderActionBase(Action[OrderInput, OrderFacts]):
         self._fresh_dispatch = False
         order = _canonical(inputs)
         if not fresh and row.status == "dispatching" and row.t212_order_id is None:
-            adopted = await _reconcile_dispatch(order, row)
+            try:
+                adopted = await _reconcile_dispatch(order, row)
+            except TheoError as exc:
+                await self._record_send_failure(order, exc)
+                raise
             if adopted:
                 return adopted
-            intent_store.mark_status(row.id, "failed", error_code=BROKER_AMBIGUOUS)
-            raise TheoError(
+            exc = TheoError(
                 BROKER_AMBIGUOUS,
                 "A previous send may already be at the broker and could not be matched",
             )
+            intent_store.mark_status(row.id, "failed", error_code=exc.code, broker_message=exc.message)
+            await self._record_send_failure(order, exc)
+            raise exc
         try:
             order_id = await get_t212_client().place_order(order)
         except TheoError as exc:
             intent_store.mark_status(row.id, "failed", error_code=exc.code, broker_message=exc.message)
+            await self._record_send_failure(order, exc)
             raise
         intent_store.mark_status(row.id, "executed", t212_order_id=order_id)
         return order_id
@@ -524,12 +534,24 @@ class OrderActionBase(Action[OrderInput, OrderFacts]):
         except TheoError:
             intent_store.mark_status(row.id, "executed", error_code=COMPENSATION_PARTIAL)
 
+    async def _record_send_failure(self, inputs: OrderInput, exc: TheoError) -> None:
+        """Comment, then let the original broker error leave this step.
+
+        A CMS or missing-case failure must not replace ``exc`` or compensate the send.
+        """
+        try:
+            await self.comment_failed(inputs, code=exc.code, message=exc.message)
+        except Exception:
+            logger.warning(
+                "case comment for failed order was not recorded; invoke keeps %s",
+                exc.code,
+                exc_info=True,
+            )
+
     @effect(describe="Record the placed order as a case comment", systems=("CMS",))
     async def comment_placed(self, inputs: OrderInput) -> None:
         row = self._intent(inputs)
-        case_id = self.scope.case_id or get_invoke_case_id()
-        if not case_id:
-            return
+        case_id = self._require_case_id()
         from src.theo.clients.t212 import current_t212_environment
 
         order = _canonical(inputs)
@@ -549,6 +571,28 @@ class OrderActionBase(Action[OrderInput, OrderFacts]):
         if row and row.error_code == COMPENSATION_PARTIAL and row.t212_order_id:
             body = body + " " + render_compensation_fill_comment(t212_order_id=row.t212_order_id)
         await self.comments.add_comment(case_id=case_id, body=body)
+
+    @effect(describe="Record that the equity order was not placed", systems=("CMS",))
+    async def comment_failed(self, inputs: OrderInput, code: str, message: str) -> None:
+        case_id = self._require_case_id()
+        order = _canonical(inputs)
+        await self.comments.add_comment(
+            case_id=case_id,
+            body=render_failed_comment(
+                ticker=order.ticker,
+                side=order.side,
+                order_type=order.order_type,
+                quantity=order.quantity,
+                code=code,
+                message=message,
+            ),
+        )
+
+    def _require_case_id(self) -> str:
+        case_id = self.scope.case_id or get_invoke_case_id()
+        if not case_id:
+            raise TheoError(VALIDATION_ERROR, "case_id is required")
+        return case_id
 
     @effect(describe="Record that the manager approved this large trade", systems=("CMS",))
     async def comment_approved(self, inputs: LargeOrderInput) -> None:

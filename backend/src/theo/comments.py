@@ -36,6 +36,22 @@ def render_placed_comment(
     )
 
 
+def render_failed_comment(
+    *,
+    ticker: str,
+    side: Side | str,
+    order_type: OrderType | str,
+    quantity: Decimal,
+    code: str,
+    message: str,
+) -> str:
+    """Host text for a send that did not place. No rationale or broker payload."""
+    return (
+        f"Order was not placed: {side} {quantity} {ticker} {order_type}. "
+        f"{code}: {message}"
+    )
+
+
 def render_review_comment(lines: list[str], *, fx_date: object, missing: list[str]) -> str:
     body = "Portfolio review:\n" + "\n".join(lines)
     body += f"\nFX date: {fx_date}."

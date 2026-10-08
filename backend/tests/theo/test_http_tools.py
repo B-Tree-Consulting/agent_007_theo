@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
 
 from src.shared.test_utils import create_de_token
-from src.theo.errors import BROKER_REJECTED, TOOL_VERSION, TheoError
-from src.theo.schemas import OrderType, Side, TimeValidity
+from src.theo.errors import BROKER_AMBIGUOUS, BROKER_REJECTED, TOOL_VERSION, TheoError
+from src.theo.schemas import MarketOrderInput, OrderType, Side, TimeValidity
 from src.theo.stores import intents as intent_store
 from tests.host.cms_fixtures import default_open_case_id
 from tests.host.http_helpers import assert_deferred, catalog_tool_by_name, invoke_tool, runtime_headers
@@ -113,6 +114,185 @@ def test_place_small_market_order_executes(
     assert fake_t212.placed
     assert recorded_case_comments
     assert "AAPL_US_EQ" in recorded_case_comments[0]["body"]
+
+
+def test_broker_reject_records_failure_comment(
+    client: TestClient,
+    de_id: str,
+    sample_capability_token: str,
+    fake_t212: FakeT212,
+    recorded_case_comments: list[dict[str, str]],
+) -> None:
+    async def _reject(_inputs):
+        raise TheoError(BROKER_REJECTED, "Too Many Requests")
+
+    fake_t212.place_order = _reject
+    body = invoke_tool(
+        client,
+        _headers(de_id, sample_capability_token),
+        {
+            "tool_name": "place_market_equity_order",
+            "tool_version": TOOL_VERSION,
+            "inputs": {
+                "ticker": "AAPL_US_EQ",
+                "side": Side.buy.value,
+                "quantity": "1",
+            },
+            "correlation_id": "cid-broker-reject",
+        },
+    )
+    evidence = _effect_error(body)
+    assert "Too Many Requests" in evidence
+    assert "compensation_failed" not in {item.get("id") for item in body.get("assertions") or []}
+    assert fake_t212.cancelled == []
+    assert len(recorded_case_comments) == 1
+    comment = recorded_case_comments[0]["body"]
+    assert "Order was not placed" in comment
+    assert "broker_rejected" in comment
+    assert "Too Many Requests" in comment
+    row = intent_store.get_active(default_open_case_id(), "cid-broker-reject", "place_market_equity_order")
+    assert row is not None
+    assert row.error_code == BROKER_REJECTED
+
+
+def test_failure_comment_error_keeps_broker_reject(
+    client: TestClient,
+    de_id: str,
+    sample_capability_token: str,
+    fake_t212: FakeT212,
+    recorded_case_comments: list[dict[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _reject(_inputs):
+        raise TheoError(BROKER_REJECTED, "Too Many Requests")
+
+    async def _boom(self, *, case_id: str, body: str) -> None:
+        del self, case_id, body
+        raise RuntimeError("cms down")
+
+    fake_t212.place_order = _reject
+    monkeypatch.setattr("src.host.case_comment_client.CaseCommentClient.add_comment", _boom)
+    body = invoke_tool(
+        client,
+        _headers(de_id, sample_capability_token),
+        {
+            "tool_name": "place_market_equity_order",
+            "tool_version": TOOL_VERSION,
+            "inputs": {
+                "ticker": "AAPL_US_EQ",
+                "side": Side.buy.value,
+                "quantity": "1",
+            },
+            "correlation_id": "cid-comment-down",
+        },
+    )
+    evidence = _effect_error(body)
+    assert "Too Many Requests" in evidence
+    assert "cms down" not in evidence
+    assert "case_id is required" not in evidence
+    assert "compensation_failed" not in {item.get("id") for item in body.get("assertions") or []}
+    assert recorded_case_comments == []
+    assert fake_t212.cancelled == []
+    row = intent_store.get_active(default_open_case_id(), "cid-comment-down", "place_market_equity_order")
+    assert row is not None
+    assert row.error_code == BROKER_REJECTED
+
+
+def _effect_error(body: dict) -> str:
+    """Auto-execute still reports succeeded; the broker failure is this assertion."""
+    failed = [
+        item
+        for item in body.get("assertions") or []
+        if item.get("id") == "effect-error" and item.get("status") == "failed"
+    ]
+    assert len(failed) == 1, body
+    assert body.get("trace", [{}])[0].get("outcome") == "error"
+    return str(failed[0].get("evidence") or "")
+
+
+def _seed_dispatching(correlation_id: str):
+    order = MarketOrderInput(ticker="AAPL_US_EQ", side=Side.buy, quantity=Decimal("1")).to_order_input()
+    return intent_store.upsert_intent(
+        case_id=default_open_case_id(),
+        inputs=order,
+        status="dispatching",
+        tool_name="place_market_equity_order",
+        correlation_id=correlation_id,
+        notional_price=Decimal("150"),
+        notional_czk=Decimal("3450"),
+        quote_source="yahoo",
+        fx_czk_per_unit=Decimal("23"),
+        fx_date=date(2026, 10, 6),
+        fx_source="CNB",
+    ).row
+
+
+def _invoke_market(client, headers, correlation_id: str) -> dict:
+    return invoke_tool(
+        client,
+        headers,
+        {
+            "tool_name": "place_market_equity_order",
+            "tool_version": TOOL_VERSION,
+            "inputs": {
+                "ticker": "AAPL_US_EQ",
+                "side": Side.buy.value,
+                "quantity": "1",
+            },
+            "correlation_id": correlation_id,
+        },
+    )
+
+
+def test_unmatched_dispatch_records_failure_comment(
+    client: TestClient,
+    de_id: str,
+    sample_capability_token: str,
+    fake_t212: FakeT212,
+    recorded_case_comments: list[dict[str, str]],
+) -> None:
+    _seed_dispatching("cid-zero-match")
+    body = _invoke_market(client, _headers(de_id, sample_capability_token), "cid-zero-match")
+    evidence = _effect_error(body)
+    assert "could not be matched" in evidence
+    assert fake_t212.placed == []
+    assert fake_t212.cancelled == []
+    assert len(recorded_case_comments) == 1
+    assert "broker_ambiguous" in recorded_case_comments[0]["body"]
+    row = intent_store.get_active(default_open_case_id(), "cid-zero-match", "place_market_equity_order")
+    assert row is not None
+    assert row.error_code == BROKER_AMBIGUOUS
+
+
+def test_multi_match_dispatch_records_failure_comment(
+    client: TestClient,
+    de_id: str,
+    sample_capability_token: str,
+    fake_t212: FakeT212,
+    recorded_case_comments: list[dict[str, str]],
+) -> None:
+    row = _seed_dispatching("cid-multi-match")
+    match = {
+        "ticker": "AAPL_US_EQ",
+        "signed_quantity": Decimal("1"),
+        "created_at": row.submitted_at,
+    }
+    fake_t212.orders.extend(
+        [
+            {**match, "t212_order_id": "1"},
+            {**match, "t212_order_id": "2"},
+        ]
+    )
+    body = _invoke_market(client, _headers(de_id, sample_capability_token), "cid-multi-match")
+    evidence = _effect_error(body)
+    assert "More than one matching" in evidence
+    assert fake_t212.placed == []
+    assert fake_t212.cancelled == []
+    assert len(recorded_case_comments) == 1
+    assert "broker_ambiguous" in recorded_case_comments[0]["body"]
+    stored = intent_store.get_active(default_open_case_id(), "cid-multi-match", "place_market_equity_order")
+    assert stored is not None
+    assert stored.error_code == BROKER_AMBIGUOUS
 
 
 def test_incomplete_limit_is_field_level_422(
