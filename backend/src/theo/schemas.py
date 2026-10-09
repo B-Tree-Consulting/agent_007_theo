@@ -294,6 +294,8 @@ class InstrumentView(BaseModel):
     fx_czk_per_unit: Decimal | None = None
     working_schedule_id: str | None = None
     on_whitelist: bool
+    fetched_at: datetime | None = None
+    stored: bool = False
 
 
 class InstrumentsOutput(BaseModel):
@@ -311,6 +313,8 @@ class ExchangeView(BaseModel):
     name: str | None = None
     timezone: str | None = None
     events: list[dict[str, Any]] = Field(default_factory=list)
+    fetched_at: datetime | None = None
+    stored: bool = False
 
 
 class ExchangesOutput(BaseModel):
@@ -367,6 +371,8 @@ class WhitelistOutput(BaseModel):
 class SourcedValue(BaseModel):
     source: str
     data: Any = None
+    fetched_at: datetime | None = None
+    stored: bool = False
 
 
 class TitleResearchOutput(BaseModel):

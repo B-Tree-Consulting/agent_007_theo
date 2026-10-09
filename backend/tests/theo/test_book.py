@@ -358,13 +358,35 @@ def test_fresh_dispatch_still_places(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(fake.placed) == 1
 
 
-def test_t212_retries_rate_limit_then_reads_cash() -> None:
-    import time
+def _instant_sleep(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    slept: list[float] = []
 
+    async def _sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr("src.theo.clients.t212.asyncio.sleep", _sleep)
+    return slept
+
+
+def _client(handler) -> object:
     import httpx
 
     from src.theo.clients.t212 import T212Client
 
+    return T212Client(
+        base_url="https://demo.trading212.com/api/v0",
+        api_key="k",
+        api_secret="s",
+        transport=httpx.MockTransport(handler),
+    )
+
+
+def test_account_past_reset_uses_the_step_then_reads_cash(monkeypatch: pytest.MonkeyPatch) -> None:
+    import time
+
+    import httpx
+
+    slept = _instant_sleep(monkeypatch)
     calls = {"n": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -378,89 +400,277 @@ def test_t212_retries_rate_limit_then_reads_cash() -> None:
             )
         return httpx.Response(200, json={"free": "10", "invested": "0", "total": "10"})
 
+    cash = asyncio.run(_client(handler).account_cash())
+    assert cash["free"] == Decimal("10")
+    assert calls["n"] == 2
+    assert slept == [1.0]
+
+
+def test_account_no_header_doubles_until_the_budget_is_spent(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    from src.theo.errors import TheoError
+
+    slept = _instant_sleep(monkeypatch)
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        calls["n"] += 1
+        return httpx.Response(429, json={"message": "slow down"})
+
+    with pytest.raises(TheoError) as caught:
+        asyncio.run(_client(handler).account_cash())
+    assert caught.value.message == "slow down"
+    assert "wait" not in caught.value.message
+    assert sum(slept) == 30
+    assert 0 not in slept
+    assert slept == [1.0, 2.0, 4.0, 8.0, 15.0]
+    assert calls["n"] == len(slept) + 1
+
+
+def test_account_header_is_clamped_to_the_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    from src.theo.errors import TheoError
+
+    slept = _instant_sleep(monkeypatch)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(429, headers={"Retry-After": "100"}, json={"message": "later"})
+
+    with pytest.raises(TheoError) as caught:
+        asyncio.run(_client(handler).account_cash())
+    assert slept == [30.0]
+    assert caught.value.message == "later"
+
+
+def test_account_reset_header_wins_over_retry_after(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    monkeypatch.setattr("src.theo.clients.rate_limit.time.time", lambda: 1_000.0)
+    slept = _instant_sleep(monkeypatch)
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(
+                429,
+                headers={"x-ratelimit-reset": "1003", "Retry-After": "1"},
+                json={"message": "later"},
+            )
+        return httpx.Response(200, json={"free": "1", "invested": "0", "total": "1"})
+
+    asyncio.run(_client(handler).account_cash())
+    assert slept == [3.1]
+
+
+def test_account_header_shorter_than_the_step_still_wins(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    slept = _instant_sleep(monkeypatch)
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(429, headers={"Retry-After": "0.5"}, json={"message": "later"})
+        return httpx.Response(200, json={"free": "1", "invested": "0", "total": "1"})
+
+    asyncio.run(_client(handler).account_cash())
+    assert slept == [0.5]
+
+
+def test_account_zero_header_is_not_a_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    slept = _instant_sleep(monkeypatch)
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(429, headers={"Retry-After": "0"}, json={"message": "later"})
+        return httpx.Response(200, json={"free": "1", "invested": "0", "total": "1"})
+
+    asyncio.run(_client(handler).account_cash())
+    assert slept == [1.0]
+
+
+def test_account_non_429_does_not_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    from src.theo.errors import TheoError
+
+    slept = _instant_sleep(monkeypatch)
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        calls["n"] += 1
+        return httpx.Response(400, json={"message": "nope"})
+
+    with pytest.raises(TheoError) as caught:
+        asyncio.run(_client(handler).account_cash())
+    assert calls["n"] == 1
+    assert slept == []
+    assert caught.value.message == "nope"
+
+
+def test_account_sleep_does_not_hold_the_lock() -> None:
+    import httpx
+
+    from src.theo.clients.t212 import T212Client
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = {"n": 0}
+
+    async def _sleep(_seconds: float) -> None:
+        started.set()
+        await release.wait()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(429, headers={"Retry-After": "5"}, json={"message": "later"})
+        return httpx.Response(200, json={"free": "3", "invested": "0", "total": "3"})
+
     client = T212Client(
         base_url="https://demo.trading212.com/api/v0",
         api_key="k",
         api_secret="s",
         transport=httpx.MockTransport(handler),
     )
-    cash = asyncio.run(client.account_cash())
-    assert cash["free"] == Decimal("10")
-    assert calls["n"] == 2
+
+    async def _run() -> None:
+        import src.theo.clients.t212 as t212
+
+        original = t212.asyncio.sleep
+        t212.asyncio.sleep = _sleep
+        try:
+            first = asyncio.create_task(client.account_cash())
+            await started.wait()
+            second = await asyncio.wait_for(client.account_cash(), timeout=1)
+            assert second["free"] == Decimal("3")
+            release.set()
+            first_cash = await first
+            assert first_cash["free"] == Decimal("3")
+        finally:
+            t212.asyncio.sleep = original
+
+    asyncio.run(_run())
 
 
-def test_metadata_instruments_is_cached_for_five_minutes(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_place_rate_limit_keeps_the_broker_body(monkeypatch: pytest.MonkeyPatch) -> None:
     import httpx
 
-    from src.theo.clients.t212 import T212Client
+    from src.theo.errors import TheoError
+    from src.theo.schemas import MarketOrderInput, Side
+
+    _instant_sleep(monkeypatch)
+    body = '{"detail":"rate limited by the venue"}'
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(429, headers={"Retry-After": "100"}, text=body)
+
+    order = MarketOrderInput(ticker="QQQ_EQ", side=Side.buy, quantity=Decimal("1")).to_order_input()
+    with pytest.raises(TheoError) as caught:
+        asyncio.run(_client(handler).place_order(order))
+    assert caught.value.message == body
+    assert "30" not in caught.value.message
+
+
+def test_metadata_success_calls_again_until_the_broker_says_wait() -> None:
+    import httpx
 
     calls = {"n": 0}
-    clock = {"t": 1_000.0}
 
     def handler(request: httpx.Request) -> httpx.Response:
         del request
         calls["n"] += 1
         return httpx.Response(200, json=[{"ticker": "AAPL_US_EQ", "currencyCode": "USD"}])
 
-    monkeypatch.setattr("src.theo.clients.t212.time.monotonic", lambda: clock["t"])
-    client = T212Client(
-        base_url="https://demo.trading212.com/api/v0",
-        api_key="k",
-        api_secret="s",
-        transport=httpx.MockTransport(handler),
-    )
-
+    client = _client(handler)
     first = asyncio.run(client.metadata_instruments())
-    clock["t"] += 299
     second = asyncio.run(client.metadata_instruments())
-    clock["t"] += 1
-    third = asyncio.run(client.metadata_instruments())
-
     assert first[0]["ticker"] == "AAPL_US_EQ"
-    assert second[0]["ticker"] == "AAPL_US_EQ"
-    assert third[0]["ticker"] == "AAPL_US_EQ"
+    assert first[0]["stored"] is False
+    assert second[0]["stored"] is False
     assert calls["n"] == 2
 
 
-def test_metadata_exchanges_is_cached_for_five_minutes(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_metadata_cooldown_serves_the_stored_list_and_a_later_success_replaces_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import httpx
+    from datetime import datetime, timedelta, timezone
 
-    from src.theo.clients.t212 import T212Client
-
+    clock = {"now": datetime(2026, 1, 1, tzinfo=timezone.utc)}
+    monkeypatch.setattr("src.theo.stores.replies._now", lambda: clock["now"])
     calls = {"n": 0}
-    clock = {"t": 1_000.0}
 
     def handler(request: httpx.Request) -> httpx.Response:
         del request
         calls["n"] += 1
-        return httpx.Response(200, json=[{"id": 7, "name": "XNAS", "timeZone": "America/New_York"}])
+        if calls["n"] == 1:
+            return httpx.Response(200, json=[{"ticker": "AAPL_US_EQ", "currencyCode": "USD"}])
+        if calls["n"] == 2:
+            return httpx.Response(429, headers={"Retry-After": "30"}, json={"message": "later"})
+        return httpx.Response(200, json=[{"ticker": "MSFT_US_EQ", "currencyCode": "USD"}])
 
-    monkeypatch.setattr("src.theo.clients.t212.time.monotonic", lambda: clock["t"])
-    client = T212Client(
-        base_url="https://demo.trading212.com/api/v0",
-        api_key="k",
-        api_secret="s",
-        transport=httpx.MockTransport(handler),
-    )
-
-    first = asyncio.run(client.metadata_exchanges())
-    clock["t"] += 299
-    second = asyncio.run(client.metadata_exchanges())
-    clock["t"] += 1
-    third = asyncio.run(client.metadata_exchanges())
-
-    assert first[0]["working_schedule_id"] == "7"
-    assert second[0]["name"] == "XNAS"
-    assert third[0]["timezone"] == "America/New_York"
+    client = _client(handler)
+    first = asyncio.run(client.metadata_instruments())
+    stored = asyncio.run(client.metadata_instruments())
+    during = asyncio.run(client.metadata_instruments())
+    assert first[0]["stored"] is False
+    assert stored[0]["ticker"] == "AAPL_US_EQ"
+    assert stored[0]["stored"] is True
+    assert during[0]["ticker"] == "AAPL_US_EQ"
     assert calls["n"] == 2
+    clock["now"] += timedelta(seconds=31)
+    replaced = asyncio.run(client.metadata_instruments())
+    assert replaced[0]["ticker"] == "MSFT_US_EQ"
+    assert replaced[0]["stored"] is False
+    assert calls["n"] == 3
 
 
-def test_metadata_exchanges_skips_a_bad_row_and_does_not_cache_a_failure() -> None:
+def test_metadata_without_a_stored_row_fails_and_does_not_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
     import httpx
 
-    from src.theo.clients.t212 import T212Client
     from src.theo.errors import TheoError
 
+    slept = _instant_sleep(monkeypatch)
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        calls["n"] += 1
+        return httpx.Response(429, json={"message": "later"})
+
+    with pytest.raises(TheoError) as caught:
+        asyncio.run(_client(handler).metadata_instruments())
+    assert calls["n"] == 1
+    assert slept == []
+    assert caught.value.message == "later"
+    with pytest.raises(TheoError):
+        asyncio.run(_client(handler).metadata_instruments())
+    assert calls["n"] == 1
+
+
+def test_metadata_exchanges_skips_a_bad_row_after_the_cooldown(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+    from datetime import datetime, timedelta, timezone
+
+    clock = {"now": datetime(2026, 1, 1, tzinfo=timezone.utc)}
+    monkeypatch.setattr("src.theo.stores.replies._now", lambda: clock["now"])
     calls = {"n": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -470,22 +680,19 @@ def test_metadata_exchanges_skips_a_bad_row_and_does_not_cache_a_failure() -> No
             return httpx.Response(429, json={"message": "Too Many Requests"})
         return httpx.Response(200, json={"items": [{"id": 7, "name": "XNAS"}, "skip-me"]})
 
-    client = T212Client(
-        base_url="https://demo.trading212.com/api/v0",
-        api_key="k",
-        api_secret="s",
-        transport=httpx.MockTransport(handler),
-    )
+    client = _client(handler)
+    from src.theo.errors import TheoError
 
     with pytest.raises(TheoError):
         asyncio.run(client.metadata_exchanges())
+    clock["now"] += timedelta(seconds=2)
     rows = asyncio.run(client.metadata_exchanges())
-
     assert calls["n"] == 2
     assert [row["name"] for row in rows] == ["XNAS"]
+    assert rows[0]["stored"] is False
 
 
-def test_metadata_exchanges_waiter_reuses_the_list_just_stored() -> None:
+def test_metadata_exchanges_second_caller_waits_then_reads_again() -> None:
     import httpx
 
     from src.theo.clients.t212 import T212Client
@@ -520,7 +727,8 @@ def test_metadata_exchanges_waiter_reuses_the_list_just_stored() -> None:
         rows_a, rows_b = await asyncio.gather(first, second)
         assert rows_a[0]["name"] == "XNAS"
         assert rows_b[0]["name"] == "XNAS"
-        assert gate.calls == 1
+        assert rows_a[0]["stored"] is False
+        assert gate.calls == 2
 
     asyncio.run(_run())
 

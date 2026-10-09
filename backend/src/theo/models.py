@@ -7,7 +7,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 from sqlalchemy import Boolean, Date, DateTime, Index, Numeric, String, Text, UniqueConstraint, text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.db.models.base import Base
@@ -64,6 +64,21 @@ class EquityOrderIntent(Base):
     executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     broker_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class StoredApiReply(Base):
+    __tablename__ = "stored_api_replies"
+    __table_args__ = (
+        UniqueConstraint("provider", "route", "subject", name="uq_stored_api_replies_call"),
+    )
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    route: Mapped[str] = mapped_column(String(256), nullable=False)
+    subject: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    payload: Mapped[dict | list | None] = mapped_column(JSONB, nullable=True)
+    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cooldown_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class CnbFxFixing(Base):

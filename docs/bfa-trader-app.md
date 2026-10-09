@@ -111,8 +111,8 @@ Every tool is `execute_context=de_autonomous`, version `1.0.0`.
 | `get_portfolio` | none | Holdings with marks and CZK value. Not working orders. |
 | `get_open_orders` | none | Every order working at the broker on this account, with `t212_order_id`. Includes app-placed orders. Cancel of those is `order_not_tracked`. |
 | `get_whitelist` | none | Permitted buy tickers, `max_names`, `approval_notional_czk`, environment. |
-| `get_instruments` | optional `ticker` | T212 instrument rows: name, ISIN, type, currency, `extended_hours`, max open quantity, `quantity_step`, `broker_last`, `fx_czk_per_unit`, `working_schedule_id`, `on_whitelist`. The host keeps this list for five minutes. No ticker → whitelist plus names held, each row still quoted, **not** the whole T212 universe. Unknown ticker → `instrument_not_found`. Listed ≠ buy permission. |
-| `get_exchanges` | optional `working_schedule_id` | T212 exchange calendars: `timezone`, OPEN, CLOSE, break, pre-market, after-hours, overnight. Join on `working_schedule_id`. The host keeps this calendar for five minutes. Host does not compute “is open now”. |
+| `get_instruments` | optional `ticker` | T212 instrument rows: name, ISIN, type, currency, `extended_hours`, max open quantity, `quantity_step`, `broker_last`, `fx_czk_per_unit`, `working_schedule_id`, `on_whitelist`. A stored list includes `fetched_at` and `stored`. The host calls again unless the broker said to wait. No ticker → whitelist plus names held, each row still quoted, **not** the whole T212 universe. Unknown ticker → `instrument_not_found`. Listed ≠ buy permission. |
+| `get_exchanges` | optional `working_schedule_id` | T212 exchange calendars: `timezone`, OPEN, CLOSE, break, pre-market, after-hours, overnight. Join on `working_schedule_id`. A stored calendar includes `fetched_at` and `stored`. The host calls again unless the broker said to wait. Host does not compute “is open now”. |
 | `get_title_research` | `ticker` (whitelist **or** currently held) | Free-tier quote, history, profile, metrics, news, earnings, macro, filings. Each block names its source. Empty = unavailable, not a sell signal. No recommendation. Neither whitelist nor held → `research_not_permitted`. |
 | `get_trade_intents` | optional `status`, `limit` (default 20, max 50) | Host-recorded orders on this case. `status` is `awaiting_approval`, `working`, or `filled`. Omit `status` to include failures. |
 
@@ -182,7 +182,7 @@ Use these as the semantic meaning of each catalog row.
 
 **get_instruments** — List Trading 212 instrument records for names you care about: ticker, name, ISIN, type, currency, whether the name allows extended hours, max open quantity, `quantity_step`, `broker_last`, `fx_czk_per_unit`, and `working_schedule_id`. Do not call this to price or size an order; the place tool does that. With no ticker, returns the whitelist plus names currently held, not the whole T212 universe. With a ticker, returns that one instrument if T212 lists it. Being listed does not mean you may buy it; get_whitelist does. Use `working_schedule_id` with get_exchanges to see the venue's hours.
 
-**get_exchanges** — List Trading 212 exchanges and their working schedules: timezone, OPEN, CLOSE, break, pre-market, after-hours, and overnight events. Use this with get_instruments.working_schedule_id and the schedule timezone to see whether a name's venue is in regular hours, extended hours, or shut. Optional working_schedule_id returns only that schedule. This is the broker's calendar, refreshed about every ten minutes. The host keeps it for five minutes. It does not place an order and does not override a broker rejection.
+**get_exchanges** — List Trading 212 exchanges and their working schedules: timezone, OPEN, CLOSE, break, pre-market, after-hours, and overnight events. Use this with get_instruments.working_schedule_id and the schedule timezone to see whether a name's venue is in regular hours, extended hours, or shut. Optional working_schedule_id returns only that schedule. This is the broker's calendar. A stored reply includes when it was fetched. The host calls again unless the broker said to wait. It does not place an order and does not override a broker rejection.
 
 **get_title_research** — Gather free-tier market information about one ticker that is on the whitelist or currently held: last price, price history, company profile, metrics, news, earnings, macro series, and regulatory filings, each tagged with the source that answered. Use this as input to your own judgement. It contains no recommendation and never says whether to trade. Do not use its last price to choose a place tool or to size an order. The place tool prices the order.
 
@@ -281,6 +281,78 @@ Every refusal comes back with a reason: off the whitelist, not enough cash, more
 A refusal means **nothing was traded**. Tell the user the reason and fix or ask. `needs-superior-defer` is waiting for the manager: the intent is stored, Trading 212 was not called, and Theo does not retry it.
 
 Unknown tool is HTTP 404. Policy, auth, and host-unavailable responses are unchanged.
+
+## Outbound calls
+
+Baseline for how this host calls outside services. Two backoff strategies. Routes only name one. Tools name how those calls are used, because that is where a place or cancel changes the next read.
+
+The host follows the three rules below. Account routes wait inside the call. Other reads below are stored in the database. The CNB rate stays on its own table.
+
+### Backoff
+
+| Strategy | What it does |
+| --- | --- |
+| AccountLive | Do not answer from an old copy. If the API says too many requests, wait and try again. The next wait is longer than the last. All waits together stop at 30 seconds. Then the call fails. |
+| StoredReply | Store the reply in the database for this call. A success replaces that row. A failure returns the stored row, even if old. While the API says to wait, do not call again, and say this is the stored copy and the time it was stored. |
+
+### Routes
+
+| API | Method and route | Backoff |
+| --- | --- | --- |
+| Trading 212 account API | `GET /equity/account/cash` | AccountLive |
+| Trading 212 account API | `GET /equity/portfolio` | AccountLive |
+| Trading 212 account API | `GET /equity/orders` | AccountLive |
+| Trading 212 account API | `GET /equity/orders/{id}` | AccountLive |
+| Trading 212 account API | `GET /equity/history/orders` | AccountLive |
+| Trading 212 account API | `POST /equity/orders/market` | AccountLive |
+| Trading 212 account API | `POST /equity/orders/limit` | AccountLive |
+| Trading 212 account API | `POST /equity/orders/stop` | AccountLive |
+| Trading 212 account API | `POST /equity/orders/stop_limit` | AccountLive |
+| Trading 212 account API | `DELETE /equity/orders/{id}` | AccountLive |
+| Trading 212 metadata API | `GET /equity/metadata/instruments` | StoredReply |
+| Trading 212 metadata API | `GET /equity/metadata/exchanges` | StoredReply |
+| CNB fixing API | `GET` `denni_kurz.txt` | StoredReply |
+| Yahoo chart API | `GET /v8/finance/chart/{symbol}` | StoredReply |
+| Stooq quote API | `GET /q/l/` | StoredReply |
+| Finnhub quote API | `GET /api/v1/quote` | StoredReply |
+| Finnhub profile API | `GET /api/v1/stock/profile2` | StoredReply |
+| Finnhub metrics API | `GET /api/v1/stock/metric` | StoredReply |
+| Tiingo prices API | `GET /tiingo/daily/{symbol}/prices` | StoredReply |
+| Alpha Vantage news API | `GET /query` with `function=NEWS_SENTIMENT` | StoredReply |
+| FRED observations API | `GET /fred/series/observations` for `FEDFUNDS` | StoredReply |
+| SEC search API | `GET /LATEST/search-index` | StoredReply |
+
+Trading 212 paths are under `https://demo.trading212.com/api/v0` or `https://live.trading212.com/api/v0`. No route has a fixed requests-per-minute quota stored here. A 429 may include `Retry-After` or `x-ratelimit-reset`. Those headers are optional.
+
+### Tools
+
+* **FreshBook** — cash, positions, and open orders must be read live after a place or cancel. If that read fails, do not show the pre-trade numbers as current.
+* **SendOrder** — check the book with FreshBook, then send the place or cancel. A success is what forces the next FreshBook read.
+* **StoredRead** — the answer may be a stored copy.
+* **LocalOnly** — no external API.
+
+| Tool | APIs it uses | Usage |
+| --- | --- | --- |
+| `get_account_summary` | Trading 212 cash. The current snapshot also loads positions, open orders, instruments, and the CNB rate. | FreshBook |
+| `get_portfolio` | Trading 212 positions, CNB rate, Trading 212 instruments | FreshBook |
+| `get_open_orders` | Trading 212 open orders. The host's own order rows only mark which ids this app placed. | FreshBook |
+| `get_whitelist` | None. The list is configuration. | LocalOnly |
+| `get_instruments` | Trading 212 instruments. Position marks come from the account snapshot. | StoredRead for the instrument list. FreshBook for the marks. |
+| `get_exchanges` | Trading 212 exchanges | StoredRead |
+| `get_title_research` | Account snapshot, then Yahoo, Stooq, Finnhub, Tiingo, Alpha Vantage, FRED, and SEC as configured | FreshBook for the held-name check. StoredRead for each research call. |
+| `get_trade_intents` | None. Rows are in this app's database. | LocalOnly |
+| `review_portfolio` | Account snapshot, then one research pack per held or whitelisted name | FreshBook for cash, positions, and open orders. StoredRead for research, instruments, and the crown rate. |
+| `place_market_equity_order` | Account snapshot, then `POST /equity/orders/market` | SendOrder |
+| `place_limit_equity_order` | Account snapshot, then `POST /equity/orders/limit` | SendOrder |
+| `place_stop_equity_order` | Account snapshot, then `POST /equity/orders/stop` | SendOrder |
+| `place_stop_limit_equity_order` | Account snapshot, then `POST /equity/orders/stop_limit` | SendOrder |
+| `place_large_market_equity_order` | Account snapshot, then the market POST after approval | SendOrder |
+| `place_large_limit_equity_order` | Account snapshot, then the limit POST after approval | SendOrder |
+| `place_large_stop_equity_order` | Account snapshot, then the stop POST after approval | SendOrder |
+| `place_large_stop_limit_equity_order` | Account snapshot, then the stop-limit POST after approval | SendOrder |
+| `cancel_equity_order` | `DELETE /equity/orders/{id}` | SendOrder |
+
+Every Trading 212 account route uses AccountLive. FreshBook and SendOrder do not change that backoff.
 
 ## Out of scope for this BFA
 

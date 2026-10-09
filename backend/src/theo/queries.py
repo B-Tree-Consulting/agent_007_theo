@@ -236,6 +236,8 @@ async def get_instruments(self: Any, inputs: GetInstrumentsInput) -> Instruments
                 fx_czk_per_unit=snap.fx_by_currency.get(currency),
                 working_schedule_id=row.get("working_schedule_id"),
                 on_whitelist=ticker in whitelist,
+                fetched_at=row.get("fetched_at"),
+                stored=bool(row.get("stored")),
             )
         )
     return InstrumentsOutput(instruments=instruments)
@@ -255,6 +257,8 @@ async def get_exchanges(self: Any, inputs: GetExchangesInput) -> ExchangesOutput
                 name=row.get("name"),
                 timezone=row.get("timezone"),
                 events=list(row.get("events") or []),
+                fetched_at=row.get("fetched_at"),
+                stored=bool(row.get("stored")),
             )
             for row in rows
         ]

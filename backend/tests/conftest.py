@@ -224,7 +224,11 @@ def _truncate_db_tables(_apply_migrations: None) -> None:
     _require_isolated_pytest_database()
     engine = get_engine()
     present = set(inspect(engine).get_table_names())
-    mutable = [name for name in ("equity_order_intents", "cnb_fx_fixings", "orders") if name in present]
+    mutable = [
+        name
+        for name in ("equity_order_intents", "cnb_fx_fixings", "stored_api_replies", "orders")
+        if name in present
+    ]
     if mutable:
         with engine.begin() as conn:
             conn.execute(text("TRUNCATE " + ", ".join(f'"{name}"' for name in mutable) + " RESTART IDENTITY CASCADE"))

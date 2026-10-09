@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
@@ -13,13 +12,13 @@ import httpx
 
 from src.config import get_settings
 from src.theo.book import signed_quantity
+from src.theo.clients.rate_limit import ACCOUNT_BUDGET_SECONDS, cooldown_seconds, positive_header_wait
 from src.theo.errors import BROKER_REJECTED, TheoError
 from src.theo.schemas import OrderInput, OrderType, Side, TimeValidity
 from src.theo.settings import t212_base_url, t212_environment
+from src.theo.stores import replies as reply_store
 
 log = logging.getLogger("theo.t212")
-
-_METADATA_CACHE_SECONDS = 300
 
 _TYPE_MAP = {
     "MARKET": OrderType.market,
@@ -43,11 +42,7 @@ class T212Client:
         self._auth = (api_key, api_secret)
         self._lock = asyncio.Lock()
         self._instruments_lock = asyncio.Lock()
-        self._instruments_cached_at: float | None = None
-        self._instruments_cached: list[dict[str, Any]] | None = None
         self._exchanges_lock = asyncio.Lock()
-        self._exchanges_cached_at: float | None = None
-        self._exchanges_cached: list[dict[str, Any]] | None = None
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
             auth=self._auth,
@@ -62,24 +57,41 @@ class T212Client:
     async def aclose(self) -> None:
         await self._client.aclose()
 
-    async def _request(self, method: str, path: str, *, disclose_body: bool = False, **kwargs: Any) -> httpx.Response:
-        optional = path.split("?", 1)[0].startswith("/equity/metadata/")
-        max_attempts = 1 if optional else 4
+    async def _send(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+        """One HTTP send. The lock is not held across a backoff sleep."""
         async with self._lock:
-            attempt = 0
-            while True:
-                attempt += 1
-                response = await self._client.request(method, path, **kwargs)
-                if response.status_code != 429 or attempt >= max_attempts:
-                    break
-                wait = _retry_wait_seconds(response)
-                if wait > 0:
-                    await asyncio.sleep(wait)
+            return await self._client.request(method, path, **kwargs)
+
+    async def _request(self, method: str, path: str, *, disclose_body: bool = False, **kwargs: Any) -> httpx.Response:
+        if _is_metadata(path):
+            response = await self._send(method, path, **kwargs)
+        else:
+            response = await self._account_request(method, path, **kwargs)
         if response.status_code >= 400:
             log.warning("t212 %s %s -> %s", method, path, response.status_code)
             message = _full_broker_message(response) if disclose_body else _safe_broker_message(response)
             raise TheoError(BROKER_REJECTED, message)
         return response
+
+    async def _account_request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+        """AccountLive: progressive waits that together stop at 30 seconds."""
+        budget = ACCOUNT_BUDGET_SECONDS
+        step = 1.0
+        while True:
+            response = await self._send(method, path, **kwargs)
+            if response.status_code != 429:
+                return response
+            header = positive_header_wait(response.headers)
+            if header is None:
+                desired = step
+                step *= 2
+            else:
+                desired = header
+            wait = min(desired, budget)
+            if wait <= 0:
+                return response
+            await asyncio.sleep(wait)
+            budget -= wait
 
     async def _get_json(self, path: str) -> Any:
         return (await self._request("GET", path)).json()
@@ -132,52 +144,52 @@ class T212Client:
         return [_map_order(row) for row in items]
 
     async def metadata_instruments(self) -> list[dict[str, Any]]:
-        fresh = self._fresh_instruments(time.monotonic())
-        if fresh is not None:
-            return fresh
         async with self._instruments_lock:
-            fresh = self._fresh_instruments(time.monotonic())
-            if fresh is not None:
-                return fresh
-            data = await self._get_json("/equity/metadata/instruments")
-            rows = data if isinstance(data, list) else data.get("items") or []
-            mapped = [_map_instrument(row) for row in rows if isinstance(row, dict)]
-            self._instruments_cached = mapped
-            self._instruments_cached_at = time.monotonic()
-            return list(mapped)
-
-    def _fresh_instruments(self, now: float) -> list[dict[str, Any]] | None:
-        cached = self._instruments_cached
-        cached_at = self._instruments_cached_at
-        if cached is None or cached_at is None:
-            return None
-        if now - cached_at >= _METADATA_CACHE_SECONDS:
-            return None
-        return list(cached)
+            return await self._stored_metadata("/equity/metadata/instruments", mapper=_map_instrument)
 
     async def metadata_exchanges(self) -> list[dict[str, Any]]:
-        fresh = self._fresh_exchanges(time.monotonic())
-        if fresh is not None:
-            return fresh
         async with self._exchanges_lock:
-            fresh = self._fresh_exchanges(time.monotonic())
-            if fresh is not None:
-                return fresh
-            data = await self._get_json("/equity/metadata/exchanges")
-            rows = data if isinstance(data, list) else data.get("items") or []
-            mapped = [_map_exchange(row) for row in rows if isinstance(row, dict)]
-            self._exchanges_cached = mapped
-            self._exchanges_cached_at = time.monotonic()
-            return list(mapped)
+            return await self._stored_metadata(
+                "/equity/metadata/exchanges",
+                mapper=_map_exchange,
+                skip_bad_rows=True,
+            )
 
-    def _fresh_exchanges(self, now: float) -> list[dict[str, Any]] | None:
-        cached = self._exchanges_cached
-        cached_at = self._exchanges_cached_at
-        if cached is None or cached_at is None:
-            return None
-        if now - cached_at >= _METADATA_CACHE_SECONDS:
-            return None
-        return list(cached)
+    async def _stored_metadata(
+        self,
+        path: str,
+        *,
+        mapper,
+        skip_bad_rows: bool = False,
+    ) -> list[dict[str, Any]]:
+        blocked = reply_store.blocking_reply("t212", path, "")
+        if blocked is not None:
+            if blocked.payload is None:
+                raise TheoError(BROKER_REJECTED, "HTTP 429")
+            return _stamp_rows(blocked.payload, mapper, blocked.fetched_at, stored=True, skip_bad_rows=skip_bad_rows)
+        try:
+            response = await self._send("GET", path)
+        except httpx.HTTPError:
+            stored = reply_store.get_reply("t212", path, "")
+            if stored is not None and stored.payload is not None:
+                return _stamp_rows(stored.payload, mapper, stored.fetched_at, stored=True, skip_bad_rows=skip_bad_rows)
+            raise
+        if response.status_code == 429:
+            reply_store.remember_cooldown("t212", path, "", cooldown_seconds(response.headers))
+            stored = reply_store.get_reply("t212", path, "")
+            if stored is not None and stored.payload is not None:
+                return _stamp_rows(stored.payload, mapper, stored.fetched_at, stored=True, skip_bad_rows=skip_bad_rows)
+            raise TheoError(BROKER_REJECTED, _safe_broker_message(response))
+        if response.status_code >= 400:
+            stored = reply_store.get_reply("t212", path, "")
+            if stored is not None and stored.payload is not None:
+                return _stamp_rows(stored.payload, mapper, stored.fetched_at, stored=True, skip_bad_rows=skip_bad_rows)
+            raise TheoError(BROKER_REJECTED, _safe_broker_message(response))
+        payload = response.json()
+        if isinstance(payload, dict):
+            payload = payload.get("items") or []
+        saved = reply_store.remember_success("t212", path, "", payload)
+        return _stamp_rows(payload, mapper, saved.fetched_at, stored=False, skip_bad_rows=skip_bad_rows)
 
     async def place_order(self, inputs: OrderInput) -> str:
         body = _order_body(inputs)
@@ -293,23 +305,27 @@ def _opt_dec(value: Any) -> Decimal | None:
     return Decimal(str(value))
 
 
-def _retry_wait_seconds(response: httpx.Response) -> float:
-    reset = response.headers.get("x-ratelimit-reset")
-    if reset:
+def _is_metadata(path: str) -> bool:
+    return path.split("?", 1)[0].startswith("/equity/metadata/")
+
+
+def _stamp_rows(payload: Any, mapper, fetched_at: datetime | None, *, stored: bool, skip_bad_rows: bool) -> list[dict[str, Any]]:
+    rows = payload if isinstance(payload, list) else []
+    stamped: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
         try:
-            wait = float(reset) - time.time()
-            if wait > 0:
-                return min(wait + 0.1, 8.0)
-            return 0.0
-        except ValueError:
-            pass
-    retry_after = response.headers.get("Retry-After")
-    if retry_after:
-        try:
-            return min(max(float(retry_after), 0.0), 8.0)
-        except ValueError:
-            pass
-    return 1.0
+            mapped = mapper(row)
+        except Exception:
+            if skip_bad_rows:
+                log.warning("t212 metadata row skipped", exc_info=True)
+                continue
+            raise
+        mapped["fetched_at"] = fetched_at
+        mapped["stored"] = stored
+        stamped.append(mapped)
+    return stamped
 
 
 def _full_broker_message(response: httpx.Response) -> str:
